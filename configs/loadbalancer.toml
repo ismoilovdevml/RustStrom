@@ -1,0 +1,28 @@
+# configs/loadbalancer.toml
+
+# The address the load balancer binds to.
+bind_address = "0.0.0.0:8080"
+
+# List of backend servers.
+[backends]
+
+[[backends.server]]
+ip = "127.0.0.1"
+port = 8081
+
+[[backends.server]]
+ip = "127.0.0.2"
+port = 8082
+
+# ... Add more backends as needed.
+
+# Optional settings (placeholders for future use)
+
+# Connection timeout in seconds (for connecting to backend servers).
+#connection_timeout = 5
+
+# Health check settings (placeholders for future use).
+#[health_check]
+#interval = 10
+#timeout = 2
+#retries = 3
