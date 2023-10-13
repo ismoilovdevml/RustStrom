@@ -1,6 +1,12 @@
+mod http_client;
+mod middleware;
+mod server;
+mod algorithms;
 mod config;
 mod connection_handler;
-mod algorithms;
+mod tcp_balancer;
+mod udp_balancer;
+mod utils;
 
 
 fn main() {

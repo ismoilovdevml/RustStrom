@@ -1,30 +1,31 @@
 use std::net::TcpStream;
-use std::io::{Read, Write};
+use std::io::{Read, Write, Error};
 use super::config::{Config, Server};
 use crate::algorithms;
+use log::{error, warn, info};
 
-pub fn handle_client(mut client: std::net::TcpStream, configuration: &Config) {
+pub fn handle_client(mut client: TcpStream, configuration: &Config) -> Result<(), Error> {
     // Extract domain from client request
     let domain_opt = extract_domain(&client);
 
-    if let Some(domain) = domain_opt {
-        if let Some(frontend_config) = configuration.frontend.get(&domain) {
-            let backend_name = &frontend_config.default_backend;
-            if let Some(backend_entry) = configuration.backend.get(backend_name) {
-                
-                let server = algorithms::select_server(&backend_entry.servers, &backend_entry.balance);
-
-                // Forward the request to the selected server
-                forward_request_to_server(&mut client, &server);
+    match domain_opt {
+        Some(domain) => {
+            if let Some(frontend_config) = configuration.frontend.get(&domain) {
+                let backend_name = &frontend_config.default_backend;
+                if let Some(backend_entry) = configuration.backend.get(backend_name) {
+                    let server = algorithms::select_server(&backend_entry.servers, &backend_entry.balance);
+                    // Forward the request to the selected server
+                    forward_request_to_server(&mut client, &server)?;
+                } else {
+                    error!("Backend configuration not found for {}", backend_name);
+                }
             } else {
-                // Log: Backend configuration not found
+                warn!("Frontend configuration not found for domain: {}", domain);
             }
-        } else {
-            // Log: Frontend configuration not found for domain
-        }
-    } else {
-        // Log: Domain extraction failed
+        },
+        None => error!("Domain extraction failed for client request"),
     }
+    Ok(())
 }
 
 fn extract_domain(client: &TcpStream) -> Option<String> {
@@ -51,21 +52,33 @@ fn extract_domain(client: &TcpStream) -> Option<String> {
     None
 }
 
-fn forward_request_to_server(client: &mut TcpStream, server: &Server) {
+fn forward_request_to_server(client: &mut TcpStream, server: &Server) -> Result<(), Error> {
     let mut buffer = [0u8; 4096];  // Define buffer size
 
-    let bytes_read = client.read(&mut buffer).unwrap_or(0);
-    
-    if bytes_read == 0 {
-        return; // Connection was closed by client
-    }
+    loop {
+        let bytes_read = client.read(&mut buffer)?;
 
-    for port in &server.ports {
-        let backend_address = format!("{}:{}", server.ip, port);
-        if let Ok(mut backend_stream) = TcpStream::connect(&backend_address) {
-            backend_stream.write_all(&buffer[0..bytes_read]).unwrap_or_default();
+        if bytes_read == 0 {
+            break; // Connection was closed by client
+        }
+
+        if let Some(backend_stream) = establish_backend_connection(server) {
+            backend_stream.write_all(&buffer[0..bytes_read])?;
             // TODO: Continue forwarding data bidirectionally between client and server
             break; // Exit after successfully forwarding to one port
         }
     }
+    Ok(())
+}
+
+fn establish_backend_connection(server: &Server) -> Option<TcpStream> {
+    for port in &server.ports {
+        let backend_address = format!("{}:{}", server.ip, port);
+        if let Ok(backend_stream) = TcpStream::connect(&backend_address) {
+            return Some(backend_stream);
+        } else {
+            warn!("Failed to connect to backend: {}", backend_address);
+        }
+    }
+    None
 }

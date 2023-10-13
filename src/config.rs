@@ -27,8 +27,7 @@ pub struct Server {
     pub ports: Vec<u16>,
 }
 
-pub fn load_config() -> Config {
-    let config_data = std::fs::read_to_string("configs/loadbalancer.toml")
-        .expect("Failed to read configuration file");
-    toml::from_str(&config_data).expect("Failed to parse configuration file")
+pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
+    let config_data = std::fs::read_to_string("configs/loadbalancer.toml")?;
+    Ok(toml::from_str(&config_data)?)
 }

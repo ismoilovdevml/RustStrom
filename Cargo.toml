@@ -12,5 +12,21 @@ serde_derive = "1.0.189"
 log = "0.4.20"
 env_logger = "0.10.0"
 rand = "0.8.5"
+hyper = { version = "0.14", features = ["full"] }
+hyper-timeout = "0.4.1"
+hyper-rustls = "0.24.1"
+async-trait = "0.1.73"
+cookie = "0.18.0"
+async-compression = { version ="0.4", features = ["brotli", "deflate", "gzip", "tokio"] }
+async-stream = "0.3.5"
+bytes = "1.5.0"
+chrono = "0.4.31"
+clap = "4.4.6"
+gethostname = "0.4.3"
+http-auth-basic = "0.3.3"
+ldap3 = "0.11.3"
+openssl-sys = { version = "0.9", features = ["vendored"] }
+regex = "1.10.0"
+url = "2.4.1"
 
 [build-dependencies]
