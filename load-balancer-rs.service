@@ -3,7 +3,7 @@ Description=Load Balancer RS
 After=network.target
 
 [Service]
-ExecStart=/etc/load-balancer-rs/load-balancer-rs
+ExecStart=/etc/load-balancer-rs
 WorkingDirectory=/opt/load-balancer-rs
 Restart=always
 User=loadbalancer

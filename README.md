@@ -2,6 +2,13 @@
 ## TCP/UDP(Layer 4) Load Balancer
 
 
+### Installer
+
+```bash
+curl -sSL https://raw.githubusercontent.com/ismoilovdevml/load-balancer-rs/main/installer.sh | bash
+```
+
+### Get Permissions
 ```bash
 sudo groupadd loadbalancer
 sudo useradd -r -s /bin/false -g loadbalancer loadbalancer
