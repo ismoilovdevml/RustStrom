@@ -1,27 +1,37 @@
-use std::fs;
-use serde_derive::Deserialize;
+use serde::Deserialize;
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct Config {
-    pub bind_address: String,
-    pub backends: Backends,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct Backends {
-    pub server: Vec<Backend>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct Backend {
+#[derive(Debug, Deserialize)]
+pub struct Server {
+    pub name: String,
     pub ip: String,
-    pub port: u16,
+    pub ports: Vec<u16>,
 }
 
-pub fn load_config() -> Result<Config, String> {
-    let config_data = fs::read_to_string("configs/loadbalancer.toml")
-        .map_err(|e| format!("Failed to read configuration file: {}", e))?;
+#[derive(Debug, Deserialize)]
+pub struct BackendEntry {
+    pub domain: String,
+    pub balance: String,
+    pub servers: Vec<Server>,
+}
 
-    toml::from_str(&config_data)
-        .map_err(|e| format!("Failed to parse configuration file: {}", e))
+#[derive(Debug, Deserialize)]
+pub struct Frontend {
+    pub bind: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Backend {
+    pub entries: Vec<BackendEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Config {
+    pub frontend: Frontend,
+    pub backend: Backend,
+}
+
+pub fn load_config() -> Config {
+    let config_data = std::fs::read_to_string("configs/loadbalancer.toml")
+        .expect("Failed to read configuration file");
+    toml::from_str(&config_data).expect("Failed to parse configuration file")
 }

@@ -1,30 +1,17 @@
-# The address the load balancer binds to.
-bind_address = "0.0.0.0:8080"
+[frontend]
+bind = "*:80"
 
-# List of backend servers.
-[backends]
-server = [
-    { ip = "100.0.0.2", port = 8080 }
+[backend]
+[[backend.entries]]
+domain = "backend.uz"
+balance = "roundrobin"
+servers = [
+    { name = "backend_server_1", ip = "192.168.1.201", ports = [8080, 15051, 15060, 15078] }
 ]
-# [backends]
 
-# [[backends.server]]
-# ip = "127.0.0.1"
-# port = 8081
-
-# [[backends.server]]
-# ip = "127.0.0.2"
-# port = 8082
-
-# ... Add more backends as needed.
-
-# Optional settings (placeholders for future use)
-
-# Connection timeout in seconds (for connecting to backend servers).
-#connection_timeout = 5
-
-# Health check settings (placeholders for future use).
-#[health_check]
-#interval = 10
-#timeout = 2
-#retries = 3
+[[backend.entries]]
+domain = "ui.uz"
+balance = "roundrobin"
+servers = [
+    { name = "ui_server_1", ip = "192.168.1.202", ports = [8080] }
+]

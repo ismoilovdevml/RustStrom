@@ -1,11 +1,12 @@
-use super::config::Backend;
+use crate::config::{Backend, LoadBalancingAlgorithm};
+use crate::algorithms::{round_robin, random_pick, ip_hash, least_connection, sticky_cookie};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
 use log::{info, error, warn};
 
-pub fn start_tcp_load_balancer(address: &str, backends: Vec<Backend>) {
+pub fn start_tcp_load_balancer(address: &str, backends: Vec<Backend>, algorithm: LoadBalancingAlgorithm) {
     let listener = TcpListener::bind(address).unwrap_or_else(|_| panic!("Failed to bind to address: {}", address));
     info!("TCP Load Balancer started on {}", address);
 
@@ -17,7 +18,7 @@ pub fn start_tcp_load_balancer(address: &str, backends: Vec<Backend>) {
             Ok(client) => {
                 let backends_clone = shared_backends.clone();
                 thread::spawn(move || {
-                    handle_client(client, backends_clone).unwrap_or_else(|e| {
+                    handle_client(client, backends_clone, &algorithm).unwrap_or_else(|e| {
                         error!("Error handling client: {}", e);
                     });
                 });
@@ -29,8 +30,14 @@ pub fn start_tcp_load_balancer(address: &str, backends: Vec<Backend>) {
     }
 }
 
-fn handle_client(mut client: TcpStream, backends: Arc<Mutex<impl Iterator<Item = Backend>>>) -> io::Result<()> {
-    let backend = backends.lock().unwrap().next().unwrap();
+fn handle_client(mut client: TcpStream, backends: Arc<Mutex<impl Iterator<Item = Backend>>>, algorithm: &LoadBalancingAlgorithm) -> io::Result<()> {
+    let backend = match algorithm {
+        LoadBalancingAlgorithm::RoundRobin => round_robin(&backends),
+        LoadBalancingAlgorithm::Random => random_pick(&backends),
+        LoadBalancingAlgorithm::IPHash => ip_hash(client.peer_addr()?.ip(), &backends),
+        LoadBalancingAlgorithm::LeastConnection => least_connection(&backends),
+        LoadBalancingAlgorithm::StickyCookie => sticky_cookie(&client, &backends),
+    }.unwrap();
 
     let mut server = TcpStream::connect((backend.ip.as_str(), backend.port)).map_err(|e| {
         error!("Error connecting to backend {}:{}", backend.ip, backend.port);
