@@ -1,33 +1,30 @@
-use serde::Deserialize;
+use serde_derive::Deserialize;
+
+#[derive(Debug, Deserialize)]
+pub struct Config {
+    pub frontend: std::collections::HashMap<String, Frontend>,
+    pub backend: std::collections::HashMap<String, Backend>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Frontend {
+    pub bind: String,
+    pub mode: String,
+    pub default_backend: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Backend {
+    pub mode: String,
+    pub balance: String,
+    pub servers: Vec<Server>,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct Server {
     pub name: String,
     pub ip: String,
     pub ports: Vec<u16>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct BackendEntry {
-    pub domain: String,
-    pub balance: String,
-    pub servers: Vec<Server>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Frontend {
-    pub bind: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Backend {
-    pub entries: Vec<BackendEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Config {
-    pub frontend: Frontend,
-    pub backend: Backend,
 }
 
 pub fn load_config() -> Config {

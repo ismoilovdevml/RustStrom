@@ -1,44 +1,84 @@
-use super::super::config::Backend;
-use std::net::TcpStream;
-use std::sync::{Arc, Mutex};
-use crate::algorithms::round_robin;
+use super::{Context, LoadBalancingStrategy, RequestForwarder};
+use async_trait::async_trait;
+use cookie::{Cookie, SameSite};
+use hyper::{
+  header::{Entry, HeaderValue, COOKIE, SET_COOKIE},
+  Body, Request, Response,
+};
 
-const COOKIE_NAME: &str = "LB_BACKEND";
+#[derive(Debug)]
+pub struct StickyCookie {
+  pub cookie_name: String,
+  pub inner: Box<dyn LoadBalancingStrategy>,
+  pub http_only: bool,
+  pub secure: bool,
+  pub same_site: SameSite,
+}
 
-pub fn sticky_cookie(client: &TcpStream, backends: &Arc<Mutex<impl Iterator<Item = Backend>>>) -> Option<Backend> {
-    // Placeholder: Inspect the client's request for the LB_BACKEND cookie.
-    // This requires parsing the HTTP headers from the raw TCP stream.
-    let cookie_value = inspect_for_cookie(client, COOKIE_NAME);
-
-    if let Some(value) = cookie_value {
-        // If the cookie exists, map it to the corresponding backend.
-        // This requires a mechanism to map cookie values to backends.
-        map_cookie_to_backend(value, backends)
-    } else {
-        // If the cookie doesn't exist, pick a backend using another method and set the cookie.
-        let backend = round_robin(backends);
-
-        // Placeholder: Set the LB_BACKEND cookie in the response.
-        // This requires modifying the HTTP headers in the raw TCP response.
-        set_backend_cookie(client, backend.clone());
-
-        backend
+impl StickyCookie {
+  pub fn new(
+    cookie_name: String,
+    inner: Box<dyn LoadBalancingStrategy>,
+    http_only: bool,
+    secure: bool,
+    same_site: SameSite,
+  ) -> StickyCookie {
+    StickyCookie {
+      cookie_name,
+      inner,
+      http_only,
+      secure,
+      same_site,
     }
+  }
+
+  fn try_parse_sticky_cookie<'a>(&self, request: &'a Request<Body>) -> Option<Cookie<'a>> {
+    let cookie_header = request.headers().get(COOKIE)?;
+
+    cookie_header.to_str().ok()?.split(';').find_map(|cookie_str| {
+      let cookie = Cookie::parse(cookie_str).ok()?;
+      if cookie.name() == self.cookie_name {
+        Some(cookie)
+      } else {
+        None
+      }
+    })
+  }
+
+  fn modify_response(&self, mut response: Response<Body>, backend_address: &str) -> Response<Body> {
+    let cookie = Cookie::build(self.cookie_name.as_str(), backend_address)
+      .http_only(self.http_only)
+      .secure(self.secure)
+      .same_site(self.same_site)
+      .finish();
+
+    let cookie_val = HeaderValue::from_str(&cookie.to_string()).unwrap();
+
+    match response.headers_mut().entry(SET_COOKIE) {
+      Entry::Occupied(mut entry) => {
+        entry.append(cookie_val);
+      }
+      Entry::Vacant(entry) => {
+        entry.insert(cookie_val);
+      }
+    }
+    response
+  }
 }
 
-fn inspect_for_cookie(_client: &TcpStream, _cookie_name: &str) -> Option<String> {
-    // Placeholder: Parse the client's HTTP request for the specified cookie.
-    // Return the cookie value if found.
-    None
-}
+#[async_trait]
+impl LoadBalancingStrategy for StickyCookie {
+  fn select_backend<'l>(&'l self, request: &Request<Body>, context: &'l Context) -> RequestForwarder {
+    let backend_address = self
+      .try_parse_sticky_cookie(&request)
+      .and_then(|cookie| context.backend_addresses.iter().find(|it| **it == cookie.value()));
 
-fn map_cookie_to_backend(_cookie_value: String, _backends: &Arc<Mutex<impl Iterator<Item = Backend>>>) -> Option<Backend> {
-    // Placeholder: Map the cookie value to the corresponding backend.
-    // This requires a mechanism to map cookie values to backends.
-    None
-}
-
-fn set_backend_cookie(_client: &TcpStream, _backend: Option<Backend>) {
-    // Placeholder: Set the specified cookie in the client's response.
-    // This requires modifying the HTTP headers in the raw TCP response.
+    if let Some(backend_address) = backend_address {
+      RequestForwarder::new(backend_address)
+    } else {
+      let backend = self.inner.select_backend(request, context);
+      let backend_address = backend.backend_address;
+      backend.map_response(move |response| self.modify_response(response, backend_address))
+    }
+  }
 }

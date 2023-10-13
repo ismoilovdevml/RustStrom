@@ -1,27 +1,77 @@
-use super::super::config::Backend;
-use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::RwLock};
 
-pub fn least_connection(backends: &Arc<Mutex<impl Iterator<Item = Backend>>>) -> Option<Backend> {
-    // Placeholder: This would typically query a shared state (or external system) to find out the current connection count for each backend.
-    // For simplicity, let's use a dummy hashmap here. 
-    // In a real-world scenario, you'd replace this with a more dynamic system.
-    let connection_counts = dummy_backend_connections();
+use hyper::{Body, Request, Uri};
+use rand::{thread_rng, Rng};
 
-    let backends_vec: Vec<Backend> = backends.lock().unwrap().clone().collect();
+use super::{Context, LoadBalancingStrategy, RequestForwarder};
 
-    // Find the backend with the least connections
-    backends_vec.iter().min_by_key(|backend| {
-        connection_counts.get(&backend.ip).unwrap_or(&0)
-    }).cloned()
+#[derive(Debug)]
+pub struct LeastConnection {
+  connections: RwLock<HashMap<String, usize>>,
 }
 
-// This is a dummy function to simulate the number of connections for each backend.
-// In a real-world scenario, you'd replace this with a system that can provide real-time counts.
-fn dummy_backend_connections() -> HashMap<String, usize> {
-    let mut counts = HashMap::new();
-    counts.insert("100.0.0.2".to_string(), 5);
-    // ... add other backends and their dummy connection counts here ...
+impl LeastConnection {
+  pub fn new() -> LeastConnection {
+    LeastConnection {
+      connections: RwLock::new(HashMap::new()),
+    }
+  }
+}
 
-    counts
+impl LoadBalancingStrategy for LeastConnection {
+  fn on_tcp_open(&self, remote: &Uri) {
+    if let Some(authority) = remote.authority() {
+      let mut connections = self.connections.write().unwrap();
+      *connections.entry(authority.to_string()).or_insert(0) += 1;
+    }
+  }
+
+  fn on_tcp_close(&self, remote: &Uri) {
+    if let Some(authority) = remote.authority() {
+      let mut connections = self.connections.write().unwrap();
+      *connections.entry(authority.to_string()).or_insert(1) -= 1;
+    }
+  }
+
+  fn select_backend<'l>(&'l self, _request: &Request<Body>, context: &'l Context) -> RequestForwarder {
+    // ok to unwrap - only panics when we panic somewhere else :)
+    let connections = self.connections.read().unwrap();
+
+    let address_indices: Vec<usize> = if connections.len() == 0 || context.backend_addresses.len() > connections.len() {
+      // if no TCP connections have been opened yet, or some backend servers are not used yet, we'll use them for the next request
+      context
+        .backend_addresses
+        .iter()
+        .enumerate()
+        .filter(|(_, address)| !connections.contains_key(**address))
+        .map(|(index, _)| index)
+        .collect()
+    } else {
+      let backend_address_map = context
+        .backend_addresses
+        .iter()
+        .enumerate()
+        .map(|(index, address)| (*address, index))
+        .collect::<HashMap<_, _>>();
+      let mut least_connections = connections.iter().collect::<Vec<_>>();
+
+      least_connections.sort_by(|a, b| a.1.cmp(b.1));
+
+      let min_connection_count = least_connections[0].1;
+      least_connections
+        .iter()
+        .take_while(|(_, connection_count)| *connection_count == min_connection_count)
+        .map(|tuple| tuple.0)
+        .map(|address| *backend_address_map.get(address.as_str()).unwrap())
+        .collect()
+    };
+
+    if address_indices.len() == 1 {
+      RequestForwarder::new(&context.backend_addresses[address_indices[0]])
+    } else {
+      let mut rng = thread_rng();
+      let index = rng.gen_range(0..address_indices.len());
+      RequestForwarder::new(&context.backend_addresses[address_indices[index]])
+    }
+  }
 }

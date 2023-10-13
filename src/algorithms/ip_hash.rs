@@ -1,18 +1,25 @@
-use super::super::config::Backend;
-use std::net::IpAddr;
-use std::sync::{Arc, Mutex};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use super::{Context, LoadBalancingStrategy, RequestForwarder};
+use hyper::{Body, Request};
+use std::{
+  collections::hash_map::DefaultHasher,
+  hash::{Hash, Hasher},
+};
 
-pub fn ip_hash(client_ip: IpAddr, backends: &Arc<Mutex<impl Iterator<Item = Backend>>>) -> Option<Backend> {
-    // Generate a consistent hash of the client's IP address
+#[derive(Debug)]
+pub struct IPHash {}
+
+impl IPHash {
+  pub fn new() -> IPHash {
+    IPHash {}
+  }
+}
+
+impl LoadBalancingStrategy for IPHash {
+  fn select_backend<'l>(&'l self, _request: &Request<Body>, context: &'l Context) -> RequestForwarder {
     let mut hasher = DefaultHasher::new();
-    client_ip.hash(&mut hasher);
-    let hash_val = hasher.finish();
-
-    // Get a consistent backend based on the hash value
-    let backends_vec: Vec<Backend> = backends.lock().unwrap().clone().collect();
-    let idx = (hash_val % backends_vec.len() as u64) as usize;
-
-    Some(backends_vec[idx].clone())
+    context.client_address.ip().hash(&mut hasher);
+    let index = (hasher.finish() % (context.backend_addresses.len() as u64)) as usize;
+    let address = &context.backend_addresses[index];
+    RequestForwarder::new(address)
+  }
 }

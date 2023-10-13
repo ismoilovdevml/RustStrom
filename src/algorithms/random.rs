@@ -1,9 +1,23 @@
-use super::config::Backend;
-use rand::seq::SliceRandom;
-use std::sync::Arc;
-use std::sync::Mutex;
+use super::{Context, LoadBalancingStrategy, RequestForwarder};
+use async_trait::async_trait;
+use hyper::{Body, Request};
+use rand::{thread_rng, Rng};
 
-pub fn random_pick(backends: &Arc<Mutex<impl Iterator<Item = Backend>>>) -> Option<Backend> {
-    let backends_vec: Vec<Backend> = backends.lock().unwrap().clone().collect();
-    backends_vec.choose(&mut rand::thread_rng()).cloned()
+#[derive(Debug)]
+pub struct Random {}
+
+impl Random {
+  pub fn new() -> Random {
+    Random {}
+  }
+}
+
+#[async_trait]
+impl LoadBalancingStrategy for Random {
+  fn select_backend<'l>(&'l self, _request: &Request<Body>, context: &'l Context) -> RequestForwarder {
+    let mut rng = thread_rng();
+    let index = rng.gen_range(0..context.backend_addresses.len());
+    let address = &context.backend_addresses[index];
+    RequestForwarder::new(address)
+  }
 }

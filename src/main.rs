@@ -1,20 +1,36 @@
 mod config;
-mod tcp_balancer;
-mod udp_balancer;
-mod utils;
+mod connection_handler;
+mod algorithms;
+
 
 fn main() {
-    env_logger::init();
-
     // Load the configuration from the TOML file
-    let configuration = config::load_config().expect("Failed to load configuration");
+    let configuration = config::load_config();
 
-    // Extract the backends from the configuration
-    let backends = configuration.backends.server;
+    // Assuming that the frontend configuration will have a single key-value pair for simplicity
+    // Extracting the bind address from the first frontend configuration
+    if let Some((_, frontend_config)) = configuration.frontend.iter().next() {
+        let bind_address = &frontend_config.bind;
 
-    // Start the TCP load balancer with the loaded configuration
-    tcp_balancer::start_tcp_load_balancer(&configuration.bind_address, backends);
+        // Start the TCP listener and handle connections
+        let listener = std::net::TcpListener::bind(bind_address)
+            .expect("Failed to bind to address");
 
-    // For future implementations, you might also start the UDP load balancer here.
-    // udp_balancer::start_udp_load_balancer(...);
+        println!("Load Balancer started on {}", bind_address);
+
+        for stream in listener.incoming() {
+            match stream {
+                Ok(client) => {
+                    std::thread::spawn(|| {
+                        connection_handler::handle_client(client, &configuration);
+                    });
+                }
+                Err(e) => {
+                    eprintln!("Error accepting client: {}", e);
+                }
+            }
+        }
+    } else {
+        eprintln!("No frontend configuration found in the config file.");
+    }
 }
