@@ -4,8 +4,10 @@ mod udp_balancer;
 mod utils;
 
 fn main() {
+    env_logger::init();
+
     // Load the configuration from the TOML file
-    let configuration = config::load_config();
+    let configuration = config::load_config().expect("Failed to load configuration");
 
     // Extract the backends from the configuration
     let backends = configuration.backends.server;
