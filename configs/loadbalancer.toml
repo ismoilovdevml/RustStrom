@@ -5,14 +5,18 @@ bind_address = "0.0.0.0:8080"
 
 # List of backend servers.
 [backends]
+server = [
+    { ip = "100.0.0.2", port = 8080 }
+]
+# [backends]
 
-[[backends.server]]
-ip = "127.0.0.1"
-port = 8081
+# [[backends.server]]
+# ip = "127.0.0.1"
+# port = 8081
 
-[[backends.server]]
-ip = "127.0.0.2"
-port = 8082
+# [[backends.server]]
+# ip = "127.0.0.2"
+# port = 8082
 
 # ... Add more backends as needed.
 

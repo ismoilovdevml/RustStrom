@@ -1,0 +1,15 @@
+[Unit]
+Description=Load Balancer RS
+After=network.target
+
+[Service]
+ExecStart=/etc/load-balancer-rs/load-balancer-rs
+WorkingDirectory=/opt/load-balancer-rs
+Restart=always
+User=loadbalancer
+Group=loadbalancer
+Environment="PATH=/usr/bin:/bin" "LOAD_BALANCER_CONFIG=/etc/load-balancer-rs/loadbalancer.toml"
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
