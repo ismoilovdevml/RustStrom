@@ -1,6 +1,6 @@
-## TCP/UDP(Layer 4) Load Balancer
+## Rust-Strom is a powerful and efficient Load Balancer
 
-### Installer
+### Installation
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/ismoilovdevml/RustStrom/main/installer.sh | bash
@@ -57,3 +57,13 @@ sudo systemctl daemon-reload
 sudo systemctl restart rust-strom
 sudo systemctl status rust-strom
 ```
+
+### Configuration
+
+Rust-Strom uses a TOML-based configuration file, typically located at /etc/rust-strom/config.toml. This file allows you to specify:
+
+HTTP and HTTPS binding addresses.
+Backend pools, along with matching criteria and addresses.
+Load balancing strategies.
+Middlewares for additional request processing.
+Please refer to the example [config.toml](https://github.com/ismoilovdevml/RustStrom/blob/main/configs/config.toml) provided with the program for a detailed breakdown of available options.
