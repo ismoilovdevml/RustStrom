@@ -1,0 +1,15 @@
+[Unit]
+Description=Load Balancer RS
+After=network.target
+
+[Service]
+ExecStart=/etc/rust-strom
+WorkingDirectory=/opt/rust-strom
+Restart=always
+User=loadbalancer
+Group=loadbalancer
+Environment="PATH=/usr/bin:/bin" "LOAD_BALANCER_CONFIG=/etc/rust-strom/loadbalancer.toml"
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
