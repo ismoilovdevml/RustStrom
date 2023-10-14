@@ -7,6 +7,8 @@ use std::{io, sync::Arc};
 use tls::ReconfigurableCertificateResolver;
 use tokio::try_join;
 use tokio_rustls::rustls::{NoClientAuth, ServerConfig};
+use warp::Filter;
+use prometheus::Encoder;
 
 mod acme;
 mod backend_pool_matcher;
@@ -24,31 +26,32 @@ mod utils;
 
 #[tokio::main]
 pub async fn main() -> Result<(), io::Error> {
-  let matches = App::new("Another Rust Load Balancer")
-    .version("1.0")
-    .about("It's basically just another rust load balancer")
-    .arg(
-      Arg::with_name("config")
-        .short("c")
-        .long("config")
-        .value_name("TOML FILE")
-        .help("The path to the configuration in TOML format.")
-        .required(true)
-        .takes_value(true),
-    )
-    .get_matches();
-  let config_path = matches.value_of("config").unwrap().to_string();
+    let matches = App::new("Another Rust Load Balancer")
+        .version("1.0")
+        .about("It's basically just another rust load balancer")
+        .arg(
+            Arg::with_name("config")
+                .short("c")
+                .long("config")
+                .value_name("TOML FILE")
+                .help("The path to the configuration in TOML format.")
+                .required(true)
+                .takes_value(true),
+        )
+        .get_matches();
+    let config_path = matches.value_of("config").unwrap().to_string();
 
-  logging::initialize();
+    logging::initialize();
 
-  let config = read_initial_config(&config_path).await?;
-  try_join!(
-    watch_config(config_path, config.clone()),
-    watch_health(config.clone()),
-    listen_for_http_request(config.clone()),
-    listen_for_https_request(config.clone())
-  )?;
-  Ok(())
+    let config = read_initial_config(&config_path).await?;
+    try_join!(
+        watch_config(config_path, config.clone()),
+        watch_health(config.clone()),
+        listen_for_http_request(config.clone()),
+        listen_for_https_request(config.clone()),
+        serve_metrics()
+    )?;
+    Ok(())
 }
 
 async fn watch_health(config: Arc<ArcSwap<RuntimeConfig>>) -> Result<(), io::Error> {
@@ -77,4 +80,21 @@ async fn listen_for_https_request(config: Arc<ArcSwap<RuntimeConfig>>) -> Result
   let acceptor = https.produce_acceptor(address).await?;
 
   server::create(acceptor, config, Scheme::HTTPS).await
+}
+
+async fn serve_metrics() -> Result<(), io::Error> {
+  // Define a warp filter that responds with the metrics.
+  let metrics_route = warp::path("metrics").map(|| {
+      let encoder = prometheus::TextEncoder::new();
+      let mut buffer = vec![];
+      let metric_families = prometheus::gather();
+      encoder.encode(&metric_families, &mut buffer).unwrap();
+      warp::reply::with_header(buffer, "content-type", encoder.format_type())
+  });
+
+  warp::serve(metrics_route)
+      .run(([127, 0, 0, 1], 9091))  // <- You can change the IP and port as needed
+      .await;
+
+  Ok(())
 }
