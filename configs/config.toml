@@ -1,0 +1,20 @@
+# config.toml
+http_address = "[::]:80"
+https_address = "[::]:443"
+
+[[backend_pools]]
+matcher = "Host('whoami.localhost')"
+addresses = ["127.0.0.1:8080", "127.0.0.1:8081", "127.0.0.1:8082"]
+schemes = ["HTTP", "HTTPS"]
+strategy = { RoundRobin = {} }
+[backend_pools.middlewares.HttpsRedirector]
+
+[[backend_pools]]
+matcher = "Host('youtube.de') && Path('/admin')"
+addresses = ["192.168.0.168:15060"]
+schemes = ["HTTPS"]
+strategy = { RoundRobin = {} }
+[backend_pools.middlewares.RateLimiter]
+limit = 10
+window_sec = 1
+[backend_pools.middlewares.Compression]
