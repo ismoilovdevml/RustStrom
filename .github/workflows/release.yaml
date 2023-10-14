@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v0.1.2'
+
+jobs:
+  build:
+    name: Build and Prepare Artifacts
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl, x86_64-pc-windows-gnu, armv7-unknown-linux-gnueabihf, armv7-unknown-linux-musleabihf]
+        file-extension: ['', '.exe']
+        include:
+          - target: x86_64-pc-windows-gnu
+            file-extension: '.exe'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Setup Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+        target: ${{ matrix.target }}
+
+    - name: Build | Release
+      uses: actions-rs/cargo@v1
+      with:
+        use-cross: true
+        command: build
+        args: --target ${{ matrix.target }} --release
+
+    - name: Prepare Artifacts
+      run: |
+        mkdir release
+        cp target/${{ matrix.target }}/release/ruststrom${{ matrix.file-extension }} release/rust-strom-${{ matrix.target }}-${{ steps.get_version.outputs.VERSION }}${{ matrix.file-extension }}
+        cp LICENSE README.md install.sh release/
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v2
+      with:
+        name: release-${{ matrix.target }}
+        path: release/
+        retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Download Artifacts
+      uses: actions/download-artifact@v2
+      with:
+        name: release-${{ matrix.target }}
+
+    - name: Create Release & Upload
+      uses: gh-actions/gh-release@master
+      with:
+        token: ${{ secrets.PERSONAL_TOKEN }}
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        body: RustStrom LoadBalancer
+        draft: false
+        prerelease: false
+        files: |
+          release/*
