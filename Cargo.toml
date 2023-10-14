@@ -1,32 +1,43 @@
 [package]
-name = "load-balancer-rs"
+name = "rust-strom"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-toml = "0.8.2"
-serde = "1.0.189"
-serde_derive = "1.0.189"
-log = "0.4.20"
-env_logger = "0.10.0"
-rand = "0.8.5"
-hyper = { version = "0.14", features = ["full"] }
-hyper-timeout = "0.4.1"
-hyper-rustls = "0.24.1"
-async-trait = "0.1.73"
-cookie = "0.18.0"
-async-compression = { version ="0.4", features = ["brotli", "deflate", "gzip", "tokio"] }
-async-stream = "0.3.5"
-bytes = "1.5.0"
-chrono = "0.4.31"
-clap = "4.4.6"
-gethostname = "0.4.3"
-http-auth-basic = "0.3.3"
-ldap3 = "0.11.3"
+acme-lib = "0.8"
+arc-swap = "1.2"
+async-compression = { version = "0.3", features = ["brotli", "deflate", "gzip", "tokio"] }
+async-stream = "0.3"
+async-trait = "0.1"
+bytes = "0.5"
+chrono = "0.4"
+clap = "2.33"
+cookie = "0.14"
+futures = "0.3"
+futures-util = "0.3"
+gethostname = "0.2"
+http-auth-basic = "0.1"
+hyper = { version = "0.14", features = ["client", "server", "http1", "http2", "stream"] }
+hyper-rustls = "0.22"
+hyper-timeout = "0.4"
+ldap3 = "0.9"
+linked-hash-map = "0.5"
+log = "0.4"
+log4rs = "1.0"
+notify = "4.0"
 openssl-sys = { version = "0.9", features = ["vendored"] }
-regex = "1.10.0"
-url = "2.4.1"
+pin-project = "1.0"
+pom = "3.2"
+rand = "0.8"
+regex = "1.4"
+serde = { version = "1.0", features = ["derive"] }
+tokio = {version = "1.0", features = ["full"] }
+tokio-rustls = "0.22"
+tokio-test = "0.4"
+tokio-util = { version = "0.6", features = ["full"] }
+toml = { version = "0.5", features = ["preserve_order"] }
+url = "2.2"
 
 [build-dependencies]

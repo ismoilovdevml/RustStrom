@@ -1,42 +1,80 @@
+use arc_swap::{access::Map, ArcSwap};
+use clap::{App, Arg};
+use configuration::{read_initial_config, watch_config, RuntimeConfig};
+use listeners::{AcceptorProducer, Https};
+use server::Scheme;
+use std::{io, sync::Arc};
+use tls::ReconfigurableCertificateResolver;
+use tokio::try_join;
+use tokio_rustls::rustls::{NoClientAuth, ServerConfig};
+
+mod acme;
+mod backend_pool_matcher;
+mod configuration;
+mod error_response;
+mod health;
 mod http_client;
+mod listeners;
+mod algorithms;
+mod logging;
 mod middleware;
 mod server;
-mod algorithms;
-mod config;
-mod connection_handler;
-mod tcp_balancer;
-mod udp_balancer;
+mod tls;
 mod utils;
 
+#[tokio::main]
+pub async fn main() -> Result<(), io::Error> {
+  let matches = App::new("Another Rust Load Balancer")
+    .version("1.0")
+    .about("It's basically just another rust load balancer")
+    .arg(
+      Arg::with_name("config")
+        .short("c")
+        .long("config")
+        .value_name("TOML FILE")
+        .help("The path to the configuration in TOML format.")
+        .required(true)
+        .takes_value(true),
+    )
+    .get_matches();
+  let config_path = matches.value_of("config").unwrap().to_string();
 
-fn main() {
-    // Load the configuration from the TOML file
-    let configuration = config::load_config();
+  logging::initialize();
 
-    // Assuming that the frontend configuration will have a single key-value pair for simplicity
-    // Extracting the bind address from the first frontend configuration
-    if let Some((_, frontend_config)) = configuration.frontend.iter().next() {
-        let bind_address = &frontend_config.bind;
+  let config = read_initial_config(&config_path).await?;
+  try_join!(
+    watch_config(config_path, config.clone()),
+    watch_health(config.clone()),
+    listen_for_http_request(config.clone()),
+    listen_for_https_request(config.clone())
+  )?;
+  Ok(())
+}
 
-        // Start the TCP listener and handle connections
-        let listener = std::net::TcpListener::bind(bind_address)
-            .expect("Failed to bind to address");
+async fn watch_health(config: Arc<ArcSwap<RuntimeConfig>>) -> Result<(), io::Error> {
+  let backend_pools = Map::new(config.clone(), |it: &RuntimeConfig| &it.shared_data.backend_pools);
+  let health_interval = Map::new(config, |it: &RuntimeConfig| &it.health_interval);
+  health::watch_health(backend_pools, health_interval).await;
+  Ok(())
+}
 
-        println!("Load Balancer started on {}", bind_address);
+async fn listen_for_http_request(config: Arc<ArcSwap<RuntimeConfig>>) -> Result<(), io::Error> {
+  let http = listeners::Http;
+  let address = config.load().http_address;
+  let acceptor = http.produce_acceptor(address).await?;
 
-        for stream in listener.incoming() {
-            match stream {
-                Ok(client) => {
-                    std::thread::spawn(|| {
-                        connection_handler::handle_client(client, &configuration);
-                    });
-                }
-                Err(e) => {
-                    eprintln!("Error accepting client: {}", e);
-                }
-            }
-        }
-    } else {
-        eprintln!("No frontend configuration found in the config file.");
-    }
+  server::create(acceptor, config, Scheme::HTTP).await
+}
+
+async fn listen_for_https_request(config: Arc<ArcSwap<RuntimeConfig>>) -> Result<(), io::Error> {
+  let mut tls_config = ServerConfig::new(NoClientAuth::new());
+  let certificates = Map::new(config.clone(), |it: &RuntimeConfig| &it.certificates);
+  let cert_resolver = ReconfigurableCertificateResolver::new(certificates);
+  tls_config.cert_resolver = Arc::new(cert_resolver);
+
+  let https = Https { tls_config };
+  let address = config.load().https_address;
+  let acceptor = https.produce_acceptor(address).await?;
+
+  server::create(acceptor, config, Scheme::HTTPS).await
 }

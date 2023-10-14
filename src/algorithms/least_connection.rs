@@ -75,3 +75,53 @@ impl LoadBalancingStrategy for LeastConnection {
     }
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  pub fn least_connection_single_least_address() {
+    let request = Request::builder().body(Body::empty()).unwrap();
+
+    let context = Context {
+      client_address: &"127.0.0.1:3000".parse().unwrap(),
+      backend_addresses: &["127.0.0.1:1", "127.0.0.1:2"],
+    };
+
+    let strategy = LeastConnection::new();
+
+    strategy.on_tcp_open(&"127.0.0.1:1".parse().unwrap());
+
+    assert_eq!(
+      strategy.select_backend(&request, &context).backend_address,
+      context.backend_addresses[1]
+    );
+  }
+
+  #[test]
+  pub fn least_connection_multiple_least_addresses() {
+    let request = Request::builder().body(Body::empty()).unwrap();
+
+    let context = Context {
+      client_address: &"127.0.0.1:3000".parse().unwrap(),
+      backend_addresses: &["127.0.0.1:1", "127.0.0.1:2", "127.0.0.1:3"],
+    };
+
+    let strategy = LeastConnection::new();
+    strategy.on_tcp_open(&"127.0.0.1:1".parse().unwrap());
+
+    assert_ne!(
+      strategy.select_backend(&request, &context).backend_address,
+      context.backend_addresses[0]
+    );
+    assert_ne!(
+      strategy.select_backend(&request, &context).backend_address,
+      context.backend_addresses[0]
+    );
+    assert_ne!(
+      strategy.select_backend(&request, &context).backend_address,
+      context.backend_addresses[0]
+    );
+  }
+}
