@@ -1,11 +1,11 @@
 name: Release
 
 on:
-    push:
-      branches:
-        - main
-      tags:
-        - 'v0.1.2'
+  push:
+    branches:
+      - main
+    tags:
+      - 'v0.1.2'
 
 jobs:
   build:
@@ -30,6 +30,24 @@ jobs:
         toolchain: stable
         override: true
         target: ${{ matrix.target }}
+    
+    - name: Cache Cargo registry
+      uses: actions/cache@v2
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+    
+    - name: Cache Cargo index
+      uses: actions/cache@v2
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+    
+    - name: Cache Cargo build
+      uses: actions/cache@v2
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build | Release
       uses: actions-rs/cargo@v1
