@@ -67,3 +67,65 @@ Backend pools, along with matching criteria and addresses.
 Load balancing strategies.
 Middlewares for additional request processing.
 Please refer to the example [config.toml](https://github.com/ismoilovdevml/RustStrom/blob/main/configs/config.toml) provided with the program for a detailed breakdown of available options.
+
+```bash
+       Request
+          |
+          v
++------------------+       +------------------+        +--------------------+
+|                  |       |                  |        |                    |
+|   Client/User    +------->      Hyper      +-------->     MainService     |
+|                  |       |                  |        |                    |
++------------------+       +------------------+        +---------+----------+
+                                                                   |
+                                                                   v
+                                                    +-------------+--------------+
+                                                    |                            |
+                                                    |   BackendPoolMatcher       |
+                                                    |                            |
+                                                    +-------------+--------------+
+                                                                   |
+                                                                   v
+                                                    +-------------+--------------+
+                                                    |                            |
+                                                    |       Health Check         |
+                                                    |                            |
+                                                    +-------------+--------------+
+                                                                   |
+                                                                   v
+                                                    +-------------+--------------+
+                                                    |                            |
+                                                    | LoadBalancingStrategy      |
+                                                    |   RoundRobin               |
+                                                    |   Random                   |
+                                                    |   IP-Hash                  |
+                                                    |   LeastConnection          |
+                                                    |   Sticky Cookie🍪           |
+                                                    |                            |
+                                                    +-------------+--------------+
+                                                                   |
+                                                                   v
+                                                    +-------------+--------------+
+                                                    |                            |
+                                                    |      Middlewares          +-----> [Compression, etc.]
+                                                    |                            |
+                                                    +-------------+--------------+
+                                                                   |
+                                                                   v
+                                                    +-------------+--------------+
+                                                    |                            |
+                                                    |     Backend Servers        |
+                                                    |                            |
+                                                    +----------------------------+
+                                                                   |
+                                                                   |
+                                                              Response
+                                                                   |
+                                                                   v
++------------------+       +------------------+        +--------------------+
+|                  |       |                  |        |                    |
+|   Client/User    <-------+      Hyper      <--------+     MainService     |
+|                  |       |                  |        |                    |
++------------------+       +------------------+        +--------------------+
+
+```
