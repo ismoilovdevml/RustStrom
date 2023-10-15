@@ -1,4 +1,4 @@
-use std::{collections::HashMap, iter::FromIterator, ops::Deref, str::FromStr};
+use std::{collections::HashMap, ops::Deref, str::FromStr};
 
 use hyper::{header::HOST, Body, Method, Request};
 use pom::parser::*;
@@ -8,89 +8,65 @@ use regex::Regex;
 #[derive(Debug)]
 pub struct ComparableRegex(Regex);
 
-/// neat trick for making all functions of the internal type available
 impl Deref for ComparableRegex {
-  type Target = Regex;
+    type Target = Regex;
 
-  fn deref(&self) -> &Self::Target {
-    &self.0
-  }
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl PartialEq for ComparableRegex {
-  fn eq(&self, other: &Self) -> bool {
-    self.0.as_str().eq(other.0.as_str())
-  }
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_str().eq(other.0.as_str())
+    }
 }
 
 impl ComparableRegex {
-  pub fn new(regex: &str) -> Result<ComparableRegex, regex::Error> {
-    Ok(ComparableRegex(Regex::new(regex)?))
-  }
+    pub fn new(regex: &str) -> Result<ComparableRegex, regex::Error> {
+        Ok(ComparableRegex(Regex::new(regex)?))
+    }
 }
 
 #[derive(Debug, PartialEq)]
 pub enum BackendPoolMatcher {
-  Host(String),
-  HostRegexp(ComparableRegex),
-  Method(Method),
-  Path(String),
-  PathRegexp(ComparableRegex),
-  Query(String, String),
-  And(Box<BackendPoolMatcher>, Box<BackendPoolMatcher>),
-  Or(Box<BackendPoolMatcher>, Box<BackendPoolMatcher>),
+    Host(String),
+    HostRegexp(ComparableRegex),
+    Method(Method),
+    Path(String),
+    PathRegexp(ComparableRegex),
+    Query(String, String),
+    And(Box<BackendPoolMatcher>, Box<BackendPoolMatcher>),
+    Or(Box<BackendPoolMatcher>, Box<BackendPoolMatcher>),
 }
 
 impl From<String> for BackendPoolMatcher {
   fn from(str: String) -> Self {
-    let chars: Vec<char> = str.chars().collect();
-    let result = parser().parse(&chars).unwrap();
-    result
+      let chars: Vec<char> = str.chars().collect();
+      let result = parser().parse(&chars).unwrap();
+      result
   }
 }
 
 impl BackendPoolMatcher {
-  /// Returns true if the BackendPoolMatcher is statisfied by the given request
-  ///
-  /// # Arguments
-  ///
-  /// * `request` - A hyper http request
-  ///
-  /// # Examples
-  ///
-  /// ```
-  /// let request = Request::builder().uri("https://google.de").body(Body::empty());
-  /// let matcher = BackendPoolMatcher::Host("google.de".into());
-  ///
-  /// assert_eq!(matcher.matches(&request), true);
-  /// ```
-  pub fn matches(&self, request: &Request<Body>) -> bool {
-    match self {
-      BackendPoolMatcher::Host(host) => request.headers().get(HOST).map(|h| h == host).unwrap_or(false),
-      BackendPoolMatcher::HostRegexp(host_regex) => request
-        .headers()
-        .get(HOST)
-        .and_then(|h| Some(host_regex.is_match(h.to_str().ok()?)))
-        .unwrap_or(false),
-      BackendPoolMatcher::Method(method) => request.method() == method,
-      BackendPoolMatcher::Path(path) => request.uri().path() == path,
-      BackendPoolMatcher::PathRegexp(path_regex) => path_regex.is_match(request.uri().path()),
-      BackendPoolMatcher::Query(key, value) => {
-        let query_params: HashMap<String, String> = request
-          .uri()
-          .query()
-          .map(|v| url::form_urlencoded::parse(v.as_bytes()).into_owned().collect())
-          .unwrap_or_else(HashMap::new);
-
-        query_params
-          .get(key)
-          .map(|sent_value| sent_value == value)
-          .unwrap_or(false)
-      }
-      BackendPoolMatcher::And(left, right) => left.matches(request) && right.matches(request),
-      BackendPoolMatcher::Or(left, right) => left.matches(request) || right.matches(request),
+    /// Simplified matches function
+    pub fn matches(&self, request: &Request<Body>) -> bool {
+        match self {
+            BackendPoolMatcher::Host(host) => request.headers().get(HOST).map_or(false, |h| h == host),
+            BackendPoolMatcher::HostRegexp(host_regex) => request.headers().get(HOST).map_or(false, |h| host_regex.is_match(h.to_str().unwrap_or(""))),
+            BackendPoolMatcher::Method(method) => request.method() == method,
+            BackendPoolMatcher::Path(path) => request.uri().path() == path,
+            BackendPoolMatcher::PathRegexp(path_regex) => path_regex.is_match(request.uri().path()),
+            BackendPoolMatcher::Query(key, value) => {
+                request.uri().query().map_or(false, |v| {
+                    let query_params: HashMap<_, _> = url::form_urlencoded::parse(v.as_bytes()).into_owned().collect();
+                    query_params.get(key).map_or(false, |sent_value| sent_value == value)
+                })
+            }
+            BackendPoolMatcher::And(left, right) => left.matches(request) && right.matches(request),
+            BackendPoolMatcher::Or(left, right) => left.matches(request) || right.matches(request),
+        }
     }
-  }
 }
 
 /// A PEG parser for generating BackendPoolMatcher rules
