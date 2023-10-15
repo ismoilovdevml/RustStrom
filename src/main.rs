@@ -56,7 +56,7 @@ pub async fn main() -> Result<(), io::Error> {
 
 async fn watch_health(config: Arc<ArcSwap<RuntimeConfig>>) -> Result<(), io::Error> {
   let backend_pools = Map::new(config.clone(), |it: &RuntimeConfig| &it.shared_data.backend_pools);
-  let health_interval = Map::new(config, |it: &RuntimeConfig| &it.health_interval);
+  let health_interval = Map::new(config.clone(), |it: &RuntimeConfig| &it.health_interval);
   health::watch_health(backend_pools, health_interval).await;
   Ok(())
 }

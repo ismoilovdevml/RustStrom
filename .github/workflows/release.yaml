@@ -3,7 +3,7 @@ name: Release CI/CD
 on:
     push:
       branches:
-        - main
+        - master
       tags:
         - 'v0.1.2'
 
@@ -42,10 +42,6 @@ jobs:
         with:
           path: target
           key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-
-    #   - name: Setup | Version
-    #     id: get_version
-    #     run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
 
       - name: Setup | Rust
         uses: actions-rs/toolchain@v1
