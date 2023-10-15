@@ -2,7 +2,7 @@ use super::{Context, LoadBalancingStrategy, RequestForwarder};
 use async_trait::async_trait;
 use cookie::{Cookie, SameSite};
 use hyper::{
-  header::{Entry, HeaderValue, COOKIE, SET_COOKIE},
+  header::{HeaderValue, COOKIE, SET_COOKIE},
   Body, Request, Response,
 };
 
@@ -35,17 +35,19 @@ impl StickyCookie {
   fn try_parse_sticky_cookie<'a>(&self, request: &'a Request<Body>) -> Option<Cookie<'a>> {
     let cookie_header = request.headers().get(COOKIE)?;
 
-    cookie_header.to_str().ok()?.split(';').find_map(|cookie_str| {
-      let cookie = Cookie::parse(cookie_str).ok()?;
-      if cookie.name() == self.cookie_name {
-        Some(cookie)
-      } else {
-        None
-      }
-    })
+    let needle = format!("{}=", self.cookie_name);
+    if let Some(start) = cookie_header.to_str().ok()?.find(&needle) {
+        let value_start = start + needle.len();
+        let end = cookie_header.to_str().ok()?[value_start..].find(';').unwrap_or(cookie_header.to_str().ok()?.len());
+        let value = &cookie_header.to_str().ok()?[value_start..value_start + end];
+        return Cookie::parse(format!("{}{}", needle, value)).ok();
+    }
+
+    None
   }
 
   fn modify_response(&self, mut response: Response<Body>, backend_address: &str) -> Response<Body> {
+    let headers = response.headers_mut();
     let cookie = Cookie::build(self.cookie_name.as_str(), backend_address)
       .http_only(self.http_only)
       .secure(self.secure)
@@ -53,15 +55,8 @@ impl StickyCookie {
       .finish();
 
     let cookie_val = HeaderValue::from_str(&cookie.to_string()).unwrap();
+    headers.append(SET_COOKIE, cookie_val);
 
-    match response.headers_mut().entry(SET_COOKIE) {
-      Entry::Occupied(mut entry) => {
-        entry.append(cookie_val);
-      }
-      Entry::Vacant(entry) => {
-        entry.insert(cookie_val);
-      }
-    }
     response
   }
 }
