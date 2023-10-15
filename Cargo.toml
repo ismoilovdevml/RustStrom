@@ -42,5 +42,6 @@ tokio-util = { version = "0.6", features = ["full"] }
 toml = { version = "0.5", features = ["preserve_order"] }
 url = "2.2"
 warp = "0.3.6"
+fnv = "1.0.7"
 
 [build-dependencies]
