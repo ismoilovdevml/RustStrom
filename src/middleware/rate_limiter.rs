@@ -28,7 +28,6 @@ impl RateLimiter {
 
     let old_entries = connections
       .iter()
-      // Due to temporal order in LinkedHashMap stopping early is possible
       .take_while(|(_client_address, (_count, time))| now.duration_since(*time).as_secs() > self.window_sec)
       .map(|(client_address, _)| *client_address)
       .collect::<Vec<_>>();
@@ -36,18 +35,13 @@ impl RateLimiter {
       connections.remove(&client_address);
     }
 
-    // Remove and reinsert to ensure temporal order in LinkedHashMap
-    let mut count = connections
-      .remove(client_address)
-      .map(|(count, _time)| count)
-      .unwrap_or(0);
-    // Prevent overflow
-    if count < u64::MAX {
-      count += 1;
-    }
-    connections.insert(*client_address, (count, now));
+    let count = connections
+      .entry(*client_address)
+      .or_insert((0, now));
+    count.0 += 1;
+    count.1 = now;
 
-    count <= self.limit
+    count.0 <= self.limit
   }
 }
 
