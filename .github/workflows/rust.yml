@@ -14,7 +14,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
+    # Caching target directory
     - name: Cache Cargo target dir
       uses: actions/cache@v2
       with:
@@ -30,10 +31,12 @@ jobs:
         toolchain: stable
         override: true
 
+    - name: Set number of cores
+      run: echo "CARGO_BUILD_JOBS=$(nproc)" >> $GITHUB_ENV
+
     - name: Build
       uses: actions-rs/cargo@v1
       with:
         command: build
       env:
-        CARGO_INCREMENTAL: 0 
-        CARGO_BUILD_JOBS: $(nproc) 
+        CARGO_INCREMENTAL: 0
