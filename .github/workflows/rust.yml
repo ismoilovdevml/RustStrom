@@ -15,14 +15,12 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # Caching target directory
     - name: Cache Cargo target dir
       uses: actions/cache@v2
       with:
         path: target
         key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
 
-    # Caching Cargo registry
     - name: Cache Cargo registry
       uses: actions/cache@v2
       with:
@@ -36,7 +34,6 @@ jobs:
         toolchain: stable
         override: true
 
-    # Install and setup sccache
     - name: Install sccache
       run: cargo install sccache
     - name: Setup sccache
@@ -44,7 +41,6 @@ jobs:
         echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-    # Cache sccache storage
     - name: Cache sccache
       uses: actions/cache@v2
       with:
