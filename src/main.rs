@@ -26,9 +26,9 @@ mod utils;
 
 #[tokio::main]
 pub async fn main() -> Result<(), io::Error> {
-    let matches = App::new("Another Rust Load Balancer")
+    let matches = App::new("RustStrom")
         .version("1.0")
-        .about("It's basically just another rust load balancer")
+        .about("Rust-Strom is a powerful and efficient Load Balancer")
         .arg(
             Arg::with_name("config")
                 .short("c")
@@ -93,7 +93,7 @@ async fn serve_metrics() -> Result<(), io::Error> {
   });
 
   warp::serve(metrics_route)
-      .run(([127, 0, 0, 1], 9091))  // <- You can change the IP and port as needed
+      .run(([0, 0, 0, 0], 9091))
       .await;
 
   Ok(())
