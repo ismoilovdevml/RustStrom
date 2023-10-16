@@ -15,6 +15,20 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    # Caching target directory
+    - name: Cache Cargo target dir
+      uses: actions/cache@v2
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
+
+    # Caching Cargo registry
+    - name: Cache Cargo registry
+      uses: actions/cache@v2
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
     - name: Setup Rust
       uses: actions-rs/toolchain@v1
       with:
@@ -22,12 +36,22 @@ jobs:
         toolchain: stable
         override: true
 
+    # Install and setup sccache
+    - name: Install sccache
+      run: cargo install sccache
+    - name: Setup sccache
+      run: |
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    # Cache sccache storage
+    - name: Cache sccache
+      uses: actions/cache@v2
+      with:
+        path: ~/.cache/sccache
+        key: ${{ runner.os }}-sccache-${{ hashFiles('**/Cargo.lock') }}
+
     - name: Build
       uses: actions-rs/cargo@v1
       with:
         command: build
-
-    # - name: Run tests
-    #   uses: actions-rs/cargo@v1
-    #   with:
-    #     command: test
