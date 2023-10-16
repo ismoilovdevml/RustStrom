@@ -14,18 +14,14 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
+      
     - name: Cache Cargo target dir
       uses: actions/cache@v2
       with:
         path: target
         key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Cache Cargo registry
-      uses: actions/cache@v2
-      with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-target-
 
     - name: Setup Rust
       uses: actions-rs/toolchain@v1
@@ -34,20 +30,10 @@ jobs:
         toolchain: stable
         override: true
 
-    - name: Install sccache
-      run: cargo install sccache
-    - name: Setup sccache
-      run: |
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-    - name: Cache sccache
-      uses: actions/cache@v2
-      with:
-        path: ~/.cache/sccache
-        key: ${{ runner.os }}-sccache-${{ hashFiles('**/Cargo.lock') }}
-
     - name: Build
       uses: actions-rs/cargo@v1
       with:
         command: build
+      env:
+        CARGO_INCREMENTAL: 0 
+        CARGO_BUILD_JOBS: $(nproc) 
