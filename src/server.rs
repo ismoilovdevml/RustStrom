@@ -258,7 +258,7 @@ impl Display for Scheme {
 mod tests {
 
   use super::*;
-  use crate::load_balancing::random::Random;
+  use crate::algorithms::random::Random;
   use std::{collections::HashMap, iter::FromIterator};
 
   fn generate_config(shared_data: SharedData) -> RuntimeConfig {

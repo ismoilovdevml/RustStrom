@@ -11,8 +11,22 @@ strategy = { RoundRobin = {} }
 
 [[backend_pools]]
 matcher = "Host('youtube.de') && Path('/admin')"
-addresses = ["192.168.1.204"]
+addresses = ["34.136.183.41"]
 schemes = ["HTTP"]
+strategy = { RoundRobin = {} }
+[backend_pools.middlewares.RateLimiter]
+limit = 10
+window_sec = 1
+[backend_pools.middlewares.Compression]
+
+# simple configration
+http_address = "[::]:80"
+https_address = "[::]:443"
+
+[[backend_pools]]
+matcher = "Host('k8s.xilol.uz')"
+addresses = ["34.136.183.44:8080", "34.136.183.44:15040", "34.136.183.44:15030"]
+schemes = ["HTTP", "HTTPS"]
 strategy = { RoundRobin = {} }
 [backend_pools.middlewares.RateLimiter]
 limit = 10
