@@ -1,0 +1,18 @@
+# Security Audit Configuration for RustStrom
+# These vulnerabilities are accepted for now due to indirect dependencies
+
+[advisories]
+# Ignore low-severity unmaintained warnings from CLI dependencies
+ignore = [
+    "RUSTSEC-2021-0139",  # ansi_term (via clap 2.34 - CLI colors only)
+    "RUSTSEC-2024-0375",  # atty unmaintained (via clap 2.34 - CLI TTY detection)
+    "RUSTSEC-2021-0145",  # atty unsound (via clap 2.34 - CLI only, low risk)
+    "RUSTSEC-2020-0016",  # net2 deprecated (via notify 4.0 - file watching only)
+]
+
+# Keep the time crate vulnerability visible - it's medium severity
+# We accept it because:
+# 1. It's only in acme-lib (ACME/Let's Encrypt)
+# 2. Build-time dependency, not runtime exposed
+# 3. Low exploitation risk in our use case
+# 4. Will be fixed when acme-lib updates
