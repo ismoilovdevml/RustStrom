@@ -28,8 +28,8 @@ mod utils;
 #[tokio::main]
 pub async fn main() -> Result<(), io::Error> {
     let matches = App::new("RustStrom")
-        .version("1.0")
-        .about("Rust-Strom is a powerful and efficient Load Balancer")
+        .version("1.0.0")
+        .about("RustStrom - High-Performance Load Balancer written in Rust")
         .arg(
             Arg::with_name("config")
                 .short("c")

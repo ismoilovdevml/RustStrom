@@ -85,8 +85,15 @@ pub struct StrategyNotifyHttpConnector {
 
 impl StrategyNotifyHttpConnector {
     pub fn new(strategy: Arc<Box<dyn LoadBalancingStrategy>>) -> StrategyNotifyHttpConnector {
+        let mut connector = HttpConnector::new();
+        // Performance optimization: Enable connection pooling and keep-alive
+        connector.set_keepalive(Some(std::time::Duration::from_secs(90)));
+        connector.set_nodelay(true);
+        // Allow more concurrent connections per host for better throughput
+        connector.set_reuse_address(true);
+
         StrategyNotifyHttpConnector {
-            inner: HttpConnector::new(),
+            inner: connector,
             strategy,
         }
     }

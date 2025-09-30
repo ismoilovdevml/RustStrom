@@ -33,7 +33,7 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
-pub async fn create<'a, I, IE, IO>(
+pub async fn create<I, IE, IO>(
     acceptor: I,
     config: Arc<ArcSwap<RuntimeConfig>>,
     scheme: Scheme,
@@ -55,11 +55,25 @@ where
             })
         }
     });
-    Server::builder(acceptor)
-        .serve(service)
+    let server = Server::builder(acceptor)
+        .http1_keepalive(true)
+        .http1_half_close(true)
+        .http2_keep_alive_interval(Some(Duration::from_secs(20)))
+        .http2_keep_alive_timeout(Duration::from_secs(20))
+        .serve(service);
+
+    // Graceful shutdown handling
+    let graceful = server.with_graceful_shutdown(async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for shutdown signal");
+        log::info!("Received shutdown signal, gracefully shutting down...");
+    });
+
+    graceful
         .map_err(|e| {
             let msg = format!("Failed to listen server: {}", e);
-            io::Error::new(io::ErrorKind::Other, msg)
+            io::Error::other(msg)
         })
         .await
 }
@@ -104,7 +118,7 @@ impl Service<Request<Body>> for MainService {
             return Box::pin(async move { Ok(response) });
         }
 
-        match pool_by_req(&shared_data, &request, &self.scheme) {
+        match pool_by_req(shared_data, &request, &self.scheme) {
             Some(pool) => {
                 let client_scheme = self.scheme;
                 let client_address = self.client_address;
@@ -172,7 +186,9 @@ impl Service<Request<Body>> for MainService {
                         // Track status code
                         let status = result.status();
                         let status_code = status.as_u16().to_string();
-                        metrics::HTTP_STATUS_CODES.with_label_values(&[&status_code]).inc();
+                        metrics::HTTP_STATUS_CODES
+                            .with_label_values(&[&status_code])
+                            .inc();
 
                         // Track errors (5xx)
                         if status.is_server_error() {
@@ -306,6 +322,7 @@ impl BackendPoolBuilder {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Hash)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum Scheme {
     HTTP,
     HTTPS,

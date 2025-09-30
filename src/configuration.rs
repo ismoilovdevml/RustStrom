@@ -236,12 +236,8 @@ async fn create_certified_key<P: AsRef<Path>>(
 }
 
 fn map_notify_error(error: notify::Error) -> io::Error {
-    match error {
-        notify::Error::Generic(e) => other(e),
-        notify::Error::Io(e) => e,
-        notify::Error::PathNotFound => not_found(error),
-        notify::Error::WatchNotFound => not_found(error),
-    }
+    // notify 6.x has different error structure
+    io::Error::other(format!("File watch error: {:?}", error))
 }
 
 fn broken_pipe<E>(error: E) -> io::Error
@@ -258,6 +254,7 @@ where
     io::Error::new(io::ErrorKind::InvalidData, error)
 }
 
+#[allow(dead_code)]
 fn not_found<E>(error: E) -> io::Error
 where
     E: Into<Box<dyn Error + Send + Sync>>,
@@ -321,7 +318,7 @@ impl TomlConfig {
             )
         })?;
         let config: TomlConfig = toml::from_str(&toml_str).map_err(|e| {
-            let e = io::Error::from(e);
+            let e = io::Error::other(format!("TOML parse error: {}", e));
             io::Error::new(
                 e.kind(),
                 format!(

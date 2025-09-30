@@ -105,7 +105,27 @@ impl<'l> RequestForwarder<'l> {
             backend_uri: self.backend_uri(&request),
             client,
         };
-        self.forward_request(request, chain, &context).await
+
+        // Add request timeout protection (30 seconds default)
+        let timeout_duration = std::time::Duration::from_secs(30);
+        match tokio::time::timeout(
+            timeout_duration,
+            self.forward_request(request, chain, &context),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(_) => {
+                // Timeout occurred
+                log::warn!(
+                    "Request to backend {} timed out after {:?}",
+                    self.backend_address,
+                    timeout_duration
+                );
+                crate::metrics::HTTP_TIMEOUTS_TOTAL.inc();
+                crate::error_response::gateway_timeout()
+            }
+        }
     }
 
     fn backend_uri(&self, request: &Request<Body>) -> Uri {

@@ -60,3 +60,10 @@ pub fn too_many_requests() -> Response<Body> {
         .body(Body::from("429 - Too Many Requests"))
         .unwrap()
 }
+
+pub fn gateway_timeout() -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::GATEWAY_TIMEOUT)
+        .body(Body::from("504 - Gateway Timeout"))
+        .unwrap()
+}

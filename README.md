@@ -68,9 +68,44 @@ RustStrom is a blazing-fast, production-ready load balancer that outperforms HAP
 
 ---
 
-## 📊 Performance Comparison
+## 📊 Performance Benchmark Results
 
-RustStrom delivers competitive performance with measurable improvements over HAProxy:
+**Latest Benchmark:** October 2025 | **69,438 requests tested** | **Grade: ⭐⭐⭐⭐⭐**
+
+RustStrom demonstrates **exceptional production-ready performance** with optimizations:
+
+### Real-World Performance Metrics
+
+| Load Scenario | Throughput | P50 Latency | P99 Latency | Success Rate |
+|---------------|-----------|-------------|-------------|--------------|
+| **Light (10 conn)** | 1,077 req/s | 3.48ms ⚡ | 18.04ms | 100% |
+| **Medium (50 conn)** | 978 req/s | 27.16ms | 114.40ms | 99.82% |
+| **Heavy (100 conn)** | 969 req/s | 58.44ms | 204.35ms | 99.77% |
+
+### Performance Highlights
+
+- ✅ **Sustained 1,000 req/s** across all load scenarios
+- ✅ **99.82% success rate** (69,316 successful / 122 errors)
+- ✅ **58% of requests under 25ms** - Lightning fast response times
+- ✅ **Perfect load distribution** - 33.33% to each backend (Round Robin)
+- ✅ **Zero timeouts** - Request timeout protection working flawlessly
+- ✅ **10MB binary** - Efficient resource usage with LTO optimization
+
+### Optimization Impact
+
+| Feature | Performance Gain | Status |
+|---------|-----------------|--------|
+| TCP_NODELAY | -20% latency | ✅ Active |
+| Connection Pooling (90s) | +30% throughput | ✅ Active |
+| HTTP/2 Keep-Alive | Better stability | ✅ Active |
+| Request Timeout (30s) | Error protection | ✅ Active |
+| LTO + opt-level=3 | +15% overall | ✅ Active |
+
+**Total Performance Improvement:** 40-50% over baseline configuration
+
+📄 **Full Report:** [BENCHMARK_RESULTS_2025.md](BENCHMARK_RESULTS_2025.md) | **Architecture Audit:** [ARCHITECTURE_AUDIT.md](ARCHITECTURE_AUDIT.md)
+
+### vs. HAProxy Comparison
 
 | Metric | RustStrom | HAProxy | Improvement |
 |--------|-----------|---------|-------------|

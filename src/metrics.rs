@@ -2,9 +2,9 @@
 
 use lazy_static::lazy_static;
 use prometheus::{
-    Counter, IntGauge, Histogram, Encoder, TextEncoder, IntCounterVec, HistogramVec,
-    register_counter, register_int_gauge, register_histogram,
-    register_int_counter_vec, register_histogram_vec, opts
+    opts, register_counter, register_histogram, register_histogram_vec, register_int_counter_vec,
+    register_int_gauge, Counter, Encoder, Histogram, HistogramVec, IntCounterVec, IntGauge,
+    TextEncoder,
 };
 
 lazy_static! {
@@ -20,7 +20,7 @@ lazy_static! {
 
     // Histogram to capture HTTP request processing duration.
     pub static ref HTTP_REQUEST_DURATION: Histogram = register_histogram!(
-        "http_request_duration_seconds", "HTTP request processing duration.", 
+        "http_request_duration_seconds", "HTTP request processing duration.",
         vec![0.025, 0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0]
     ).unwrap();
 
@@ -60,6 +60,7 @@ lazy_static! {
     ).unwrap();
 }
 
+#[allow(dead_code)]
 pub fn gather_metrics() -> Vec<u8> {
     let encoder = TextEncoder::new();
     let mut buffer = vec![];
