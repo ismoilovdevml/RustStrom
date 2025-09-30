@@ -1,17 +1,37 @@
-FROM rust:1.50-alpine as builder
+# Multi-stage build for RustStrom
+FROM rust:1.84-slim as builder
 
-ENV WORKDIR /code
-WORKDIR ${WORKDIR}
+WORKDIR /app
 
-RUN rustup target add x86_64-unknown-linux-musl && \
-  apk add --no-cache musl-dev perl make gcc
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-ADD . .
+# Copy source
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
 
-RUN cargo build --release --target x86_64-unknown-linux-musl
+# Build release binary with optimizations
+RUN cargo build --release
 
-FROM scratch as runner
+# Runtime image
+FROM debian:bookworm-slim
 
-COPY --from=builder /code/target/x86_64-unknown-linux-musl/release/rust-strom /usr/bin/rust-strom
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
 
-CMD ["rust-strom"]
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /app/target/release/rust-strom /usr/local/bin/rust-strom
+
+# Copy default config
+COPY configs/config.toml /app/config.toml
+
+EXPOSE 80 443 9090
+
+CMD ["rust-strom", "/app/config.toml"]

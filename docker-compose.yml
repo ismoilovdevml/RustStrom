@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  # Backend test servers
+  backend1:
+    image: python:3.11-alpine
+    command: python -m http.server 8080
+    working_dir: /app
+    volumes:
+      - ./test-data:/app
+    networks:
+      - ruststrom-net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  backend2:
+    image: python:3.11-alpine
+    command: python -m http.server 8081
+    working_dir: /app
+    volumes:
+      - ./test-data:/app
+    networks:
+      - ruststrom-net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8081"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  backend3:
+    image: python:3.11-alpine
+    command: python -m http.server 8082
+    working_dir: /app
+    volumes:
+      - ./test-data:/app
+    networks:
+      - ruststrom-net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8082"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # RustStrom Load Balancer
+  ruststrom:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:80"
+      - "9090:9090"
+    volumes:
+      - ./docker-config.toml:/app/config.toml:ro
+    networks:
+      - ruststrom-net
+    depends_on:
+      - backend1
+      - backend2
+      - backend3
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # Dashboard
+  dashboard:
+    build:
+      context: ./ruststrom-dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    networks:
+      - ruststrom-net
+    depends_on:
+      - ruststrom
+    restart: unless-stopped
+
+networks:
+  ruststrom-net:
+    driver: bridge

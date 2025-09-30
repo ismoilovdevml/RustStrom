@@ -1,0 +1,17 @@
+# Docker Configuration for RustStrom
+
+http_address = "0.0.0.0:80"
+
+# Enable metrics endpoint
+prometheus_metrics_address = "0.0.0.0:9090"
+
+[[backend_pools]]
+matcher = "Path('/')"
+addresses = ["backend1:8080", "backend2:8081", "backend3:8082"]
+schemes = ["HTTP"]
+strategy = { RoundRobin = {} }
+
+[backend_pools.health_config]
+slow_threshold = 300
+timeout = 2000
+path = "/"
