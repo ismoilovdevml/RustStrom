@@ -90,6 +90,10 @@ mod tests {
         }
 
         // With 8 different IPs and 4 backends, we should get at least 2 different backends
-        assert!(results.len() >= 2, "Expected at least 2 different backends, got {}", results.len());
+        assert!(
+            results.len() >= 2,
+            "Expected at least 2 different backends, got {}",
+            results.len()
+        );
     }
 }
