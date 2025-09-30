@@ -6,7 +6,7 @@ use server::Scheme;
 use std::{io, sync::Arc};
 use tls::ReconfigurableCertificateResolver;
 use tokio::try_join;
-use tokio_rustls::rustls::{NoClientAuth, ServerConfig};
+use tokio_rustls::rustls::ServerConfig;
 use warp::Filter;
 use prometheus::Encoder;
 
@@ -70,10 +70,13 @@ async fn listen_for_http_request(config: Arc<ArcSwap<RuntimeConfig>>) -> Result<
 }
 
 async fn listen_for_https_request(config: Arc<ArcSwap<RuntimeConfig>>) -> Result<(), io::Error> {
-  let mut tls_config = ServerConfig::new(NoClientAuth::new());
   let certificates = Map::new(config.clone(), |it: &RuntimeConfig| &it.certificates);
   let cert_resolver = ReconfigurableCertificateResolver::new(certificates);
-  tls_config.cert_resolver = Arc::new(cert_resolver);
+
+  let tls_config = ServerConfig::builder()
+    .with_safe_defaults()
+    .with_no_client_auth()
+    .with_cert_resolver(Arc::new(cert_resolver));
 
   let https = Https { tls_config };
   let address = config.load().https_address;

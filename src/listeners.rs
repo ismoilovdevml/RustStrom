@@ -50,6 +50,8 @@ impl AcceptorProducer<TcpStream> for Http {
     let incoming_stream = stream! {
       loop {
         let (socket, _) = listener.accept().await?;
+        // Performance optimizations: Disable Nagle's algorithm for lower latency
+        let _ = socket.set_nodelay(true);
         yield Ok(socket);
       }
     };
@@ -78,6 +80,8 @@ impl AcceptorProducer<TlsStream<TcpStream>> for Https {
     let incoming_stream = stream! {
       loop {
           let (socket, _) = listener.accept().await?;
+          // Performance optimizations: Disable Nagle's algorithm for lower latency
+          let _ = socket.set_nodelay(true);
           match tls_acceptor.accept(socket).await {
             Ok(tls_stream) => yield Ok(tls_stream),
             Err(e) => error!("Failed to accept TLS socket: {}", e)

@@ -38,12 +38,20 @@ rand = "0.8"
 regex = "1.4"
 serde = { version = "1.0", features = ["derive"] }
 tokio = {version = "1.0", features = ["full"] }
-tokio-rustls = "0.22"
+tokio-rustls = "0.24"
+rustls-pemfile = "1.0"
 tokio-test = "0.4"
 tokio-util = { version = "0.7.9", features = ["full"] }
 toml = { version = "0.5.11", features = ["preserve_order"] }
 url = "2.2"
 warp = "0.3.6"
+
+[profile.release]
+opt-level = 3              # Maximum optimization
+lto = "fat"                # Link-time optimization for better performance
+codegen-units = 1          # Single codegen unit for better optimization
+panic = "abort"            # Smaller binary size, faster panic handling
+strip = true               # Strip symbols for smaller binary
 
 # [future-incompat-report]
 # frequency = "always"    

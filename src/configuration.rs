@@ -31,10 +31,7 @@ use std::{
   time::Duration,
 };
 use tokio::sync::watch;
-use tokio_rustls::{
-  rustls::sign::CertifiedKey,
-  webpki::{DNSName, DNSNameRef},
-};
+use tokio_rustls::rustls::{sign::CertifiedKey, ServerName};
 use toml::{value::Table, Value};
 
 pub async fn read_initial_config<P: AsRef<Path>>(path: P) -> Result<Arc<ArcSwap<RuntimeConfig>>, io::Error> {
@@ -142,12 +139,11 @@ async fn runtime_config_from_toml_config<P: AsRef<Path>>(
 
   let mut certificates = HashMap::new();
   for (sni_name, certificate_config) in other.certificates {
-    let dns_name = DNSNameRef::try_from_ascii_str(&sni_name)
-      .map_err(invalid_data)?
-      .to_owned();
+    let server_name: ServerName = sni_name.as_str().try_into()
+      .map_err(invalid_data)?;
     if init_acme || !matches!(certificate_config, CertificateConfig::ACME { .. }) {
-      let certificate = create_certified_key(&config_dir, certificate_config, dns_name.as_ref(), &acme_handler).await?;
-      certificates.insert(dns_name, certificate);
+      let certificate = create_certified_key(&config_dir, certificate_config, &server_name, &acme_handler).await?;
+      certificates.insert(server_name, certificate);
     }
   }
 
@@ -169,7 +165,7 @@ async fn runtime_config_from_toml_config<P: AsRef<Path>>(
 async fn create_certified_key<P: AsRef<Path>>(
   config_dir: P,
   config: CertificateConfig,
-  sni_name: DNSNameRef<'_>,
+  sni_name: &ServerName,
   acme_handler: &AcmeHandler,
 ) -> Result<CertifiedKey, io::Error> {
   let certified_key = match config {
@@ -188,8 +184,15 @@ async fn create_certified_key<P: AsRef<Path>>(
     } => {
       let persist_dir = config_dir.as_ref().join(persist_dir);
       // TODO refresh certificates once they expire?
+      let sni_str = match sni_name {
+        ServerName::DnsName(d) => d.as_ref(),
+        ServerName::IpAddress(_) => {
+          return Err(io::Error::new(io::ErrorKind::InvalidInput, "ACME does not support IP addresses"));
+        }
+        _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "Unsupported server name type")),
+      };
       let certificate = acme_handler
-        .initiate_challenge(staging, &persist_dir, &email, sni_name.into())
+        .initiate_challenge(staging, &persist_dir, &email, sni_str)
         .await
         .map_err(other)?;
 
@@ -198,16 +201,13 @@ async fn create_certified_key<P: AsRef<Path>>(
           e.kind(),
           format!(
             "Could not load ACME certificate for '{}' due to: {}",
-            Into::<&str>::into(sni_name),
+            sni_str,
             e
           ),
         )
       })?
     }
   };
-  certified_key
-    .cross_check_end_entity_cert(Some(sni_name))
-    .map_err(invalid_data)?;
   Ok(certified_key)
 }
 
@@ -252,7 +252,7 @@ pub struct RuntimeConfig {
   pub http_address: SocketAddr,
   pub https_address: SocketAddr,
   pub shared_data: SharedData,
-  pub certificates: HashMap<DNSName, CertifiedKey>,
+  pub certificates: HashMap<ServerName, CertifiedKey>,
   pub health_interval: Duration,
 }
 
