@@ -97,7 +97,7 @@ async fn serve_metrics() -> Result<(), io::Error> {
         warp::reply::with_header(buffer, "content-type", encoder.format_type())
     });
 
-    warp::serve(metrics_route).run(([0, 0, 0, 0], 9091)).await;
+    warp::serve(metrics_route).run(([0, 0, 0, 0], 9090)).await;
 
     Ok(())
 }
