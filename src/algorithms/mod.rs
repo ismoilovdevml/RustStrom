@@ -53,7 +53,7 @@ pub struct Context<'l> {
 ///
 /// [`forward_request_to_backend`]: RequestForwarder::forward_request_to_backend
 pub struct RequestForwarder<'l> {
-    backend_address: &'l str,
+    pub backend_address: &'l str,
     response_mapper: Box<dyn Fn(Response<Body>) -> Response<Body> + Send + Sync + 'l>,
 }
 

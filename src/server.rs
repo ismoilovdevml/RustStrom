@@ -7,6 +7,7 @@ use crate::{
     health::{HealthConfig, Healthiness},
     http_client::StrategyNotifyHttpConnector,
     listeners::RemoteAddress,
+    metrics,
     middleware::MiddlewareChain,
 };
 use arc_swap::ArcSwap;
@@ -89,10 +90,17 @@ impl Service<Request<Body>> for MainService {
             request.uri()
         );
 
+        // Increment total requests counter
+        metrics::HTTP_REQUESTS_TOTAL.inc();
+
+        // Increment active connections
+        metrics::ACTIVE_HTTP_CONNECTIONS.inc();
+
         let config = self.config.load();
         let shared_data = &config.shared_data;
 
         if let Some(response) = shared_data.acme_handler.respond_to_challenge(&request) {
+            metrics::ACTIVE_HTTP_CONNECTIONS.dec();
             return Box::pin(async move { Ok(response) });
         }
 
@@ -102,6 +110,7 @@ impl Service<Request<Body>> for MainService {
                 let client_address = self.client_address;
 
                 Box::pin(async move {
+                    let start_time = std::time::Instant::now();
                     // clone, filter, map, LoadBalancingContext:backend_addresses
                     let mut working_addresses = pool
                         .addresses
@@ -126,13 +135,23 @@ impl Service<Request<Body>> for MainService {
                     if working_addresses.is_empty() {
                         // we don't have any working addresses, so don't call load balancer strategy and abort early
                         // middlewares are also not running
-                        Ok(bad_gateway())
+                        metrics::ACTIVE_HTTP_CONNECTIONS.dec();
+                        let duration = start_time.elapsed().as_secs_f64();
+                        metrics::HTTP_REQUEST_DURATION.observe(duration);
+
+                        let response = bad_gateway();
+                        metrics::HTTP_STATUS_CODES.with_label_values(&["502"]).inc();
+                        metrics::HTTP_ERRORS_TOTAL.inc();
+
+                        Ok(response)
                     } else {
                         let context = algorithms::Context {
                             client_address: &client_address,
                             backend_addresses: &working_addresses,
                         };
                         let backend = pool.strategy.select_backend(&request, &context);
+
+                        let backend_start = std::time::Instant::now();
                         let result = backend
                             .forward_request_to_backend(
                                 request,
@@ -142,11 +161,38 @@ impl Service<Request<Body>> for MainService {
                                 &pool.client,
                             )
                             .await;
+
+                        // Track backend response time
+                        let backend_duration = backend_start.elapsed().as_secs_f64();
+                        let backend_addr = backend.backend_address;
+                        metrics::BACKEND_RESPONSE_TIME
+                            .with_label_values(&[backend_addr])
+                            .observe(backend_duration);
+
+                        // Track status code
+                        let status = result.status();
+                        let status_code = status.as_u16().to_string();
+                        metrics::HTTP_STATUS_CODES.with_label_values(&[&status_code]).inc();
+
+                        // Track errors (5xx)
+                        if status.is_server_error() {
+                            metrics::HTTP_ERRORS_TOTAL.inc();
+                        }
+
+                        // Decrement active connections and record request duration
+                        metrics::ACTIVE_HTTP_CONNECTIONS.dec();
+                        let duration = start_time.elapsed().as_secs_f64();
+                        metrics::HTTP_REQUEST_DURATION.observe(duration);
+
                         Ok(result)
                     }
                 })
             }
-            _ => Box::pin(async { Ok(not_found()) }),
+            _ => {
+                metrics::ACTIVE_HTTP_CONNECTIONS.dec();
+                metrics::HTTP_STATUS_CODES.with_label_values(&["404"]).inc();
+                Box::pin(async { Ok(not_found()) })
+            }
         }
     }
 }

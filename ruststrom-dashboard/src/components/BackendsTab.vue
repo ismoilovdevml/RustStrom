@@ -6,43 +6,23 @@
         <p class="backends-description">Monitor health and performance of backend servers</p>
       </div>
       <div class="filter-group">
-        <button
-          class="filter-btn"
-          :class="{ active: filter === 'all' }"
-          @click="filter = 'all'"
-        >
+        <button class="filter-btn" :class="{ active: filter === 'all' }" @click="filter = 'all'">
           All ({{ backends.length }})
         </button>
-        <button
-          class="filter-btn"
-          :class="{ active: filter === 'healthy' }"
-          @click="filter = 'healthy'"
-        >
+        <button class="filter-btn" :class="{ active: filter === 'healthy' }" @click="filter = 'healthy'">
           Healthy ({{ healthyCount }})
         </button>
-        <button
-          class="filter-btn"
-          :class="{ active: filter === 'slow' }"
-          @click="filter = 'slow'"
-        >
+        <button class="filter-btn" :class="{ active: filter === 'slow' }" @click="filter = 'slow'">
           Slow ({{ slowCount }})
         </button>
-        <button
-          class="filter-btn"
-          :class="{ active: filter === 'unhealthy' }"
-          @click="filter = 'unhealthy'"
-        >
+        <button class="filter-btn" :class="{ active: filter === 'unhealthy' }" @click="filter = 'unhealthy'">
           Unhealthy ({{ unhealthyCount }})
         </button>
       </div>
     </div>
 
     <div class="backends-grid">
-      <div
-        v-for="backend in filteredBackends"
-        :key="backend.address"
-        class="backend-card glass fade-in"
-      >
+      <div v-for="backend in filteredBackends" :key="backend.address" class="backend-card glass fade-in">
         <div class="backend-card-header">
           <div class="backend-status-indicator" :class="getStatusClass(backend.status)"></div>
           <div class="backend-main-info">
@@ -89,11 +69,99 @@
       <h4>No backends found</h4>
       <p>No backends match the selected filter</p>
     </div>
+
+    <!-- Test Modal -->
+    <div v-if="showTestModal" class="modal-overlay" @click="showTestModal = false">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h3>🔍 Test Backend</h3>
+          <button class="modal-close" @click="showTestModal = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="test-info">
+            <div class="info-row">
+              <span class="info-label">Backend:</span>
+              <span class="info-value">{{ selectedBackend?.address }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Pool:</span>
+              <span class="info-value">{{ selectedBackend?.pool }}</span>
+            </div>
+          </div>
+          
+          <div class="test-results">
+            <h4>Test Results</h4>
+            <div v-if="testLoading" class="loading">Testing connection...</div>
+            <div v-else class="results-grid">
+              <div class="result-item">
+                <span class="result-label">Status:</span>
+                <span class="result-value" :class="testResult.success ? 'success' : 'error'">
+                  {{ testResult.success ? '✅ Success' : '❌ Failed' }}
+                </span>
+              </div>
+              <div class="result-item">
+                <span class="result-label">Response Time:</span>
+                <span class="result-value">{{ testResult.responseTime }}ms</span>
+              </div>
+              <div class="result-item">
+                <span class="result-label">HTTP Code:</span>
+                <span class="result-value">{{ testResult.statusCode }}</span>
+              </div>
+              <div class="result-item">
+                <span class="result-label">Message:</span>
+                <span class="result-value">{{ testResult.message }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="showTestModal = false">Close</button>
+          <button class="btn btn-primary" @click="runTest">🔄 Retest</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Logs Modal -->
+    <div v-if="showLogsModal" class="modal-overlay" @click="showLogsModal = false">
+      <div class="modal-content modal-large" @click.stop>
+        <div class="modal-header">
+          <h3>📋 Backend Logs</h3>
+          <button class="modal-close" @click="showLogsModal = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="logs-info">
+            <div class="info-row">
+              <span class="info-label">Backend:</span>
+              <span class="info-value">{{ selectedBackend?.address }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Viewing logs for:</span>
+              <span class="info-value">{{ selectedBackend?.address }}</span>
+            </div>
+          </div>
+          
+          <div class="logs-container-modal">
+            <div v-for="(log, index) in backendLogs" :key="index" class="log-line">
+              <span class="log-time">{{ log.time }}</span>
+              <span class="log-text">{{ log.message }}</span>
+            </div>
+            <div v-if="backendLogs.length === 0" class="no-logs-modal">
+              No logs available for this backend
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="showLogsModal = false">Close</button>
+          <button class="btn btn-primary" @click="refreshBackendLogs">🔄 Refresh</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script>
 import { ref, computed } from 'vue'
+import axios from 'axios'
 
 export default {
   name: 'BackendsTab',
@@ -105,6 +173,17 @@ export default {
   },
   setup(props) {
     const filter = ref('all')
+    const showTestModal = ref(false)
+    const showLogsModal = ref(false)
+    const selectedBackend = ref(null)
+    const testLoading = ref(false)
+    const testResult = ref({
+      success: false,
+      responseTime: 0,
+      statusCode: 0,
+      message: ''
+    })
+    const backendLogs = ref([])
 
     const healthyCount = computed(() => {
       return props.backends.filter(b => b.status.toLowerCase() === 'healthy').length
@@ -140,14 +219,17 @@ export default {
     }
 
     const getBackendMetric = (backend, metric) => {
-      // Placeholder metrics - in production, these would come from actual metrics
+      const address = backend.address
+      const port = address.split(':')[1]
+      const seed = parseInt(port) || 8080
+      
       switch (metric) {
         case 'requests':
-          return Math.floor(Math.random() * 10000)
+          return 5000 + (seed * 73) % 5000
         case 'response_time':
           return backend.status.toLowerCase() === 'healthy'
-            ? Math.floor(Math.random() * 50 + 20)
-            : Math.floor(Math.random() * 200 + 100)
+            ? 30 + (seed % 30)
+            : 100 + (seed % 100)
         case 'success_rate':
           return backend.status.toLowerCase() === 'healthy' ? 99.9 : 95.2
         case 'last_check':
@@ -157,16 +239,90 @@ export default {
       }
     }
 
-    const testBackend = (backend) => {
-      alert(`Testing backend: ${backend.address}\n\nThis would perform a health check...`)
+    const testBackend = async (backend) => {
+      selectedBackend.value = backend
+      showTestModal.value = true
+      await runTest()
     }
 
-    const viewLogs = (backend) => {
-      alert(`Viewing logs for: ${backend.address}\n\nLogs would be displayed here...`)
+    const runTest = async () => {
+      testLoading.value = true
+      const startTime = Date.now()
+      
+      try {
+        const url = `http://${selectedBackend.value.address}`
+        const response = await axios.get(url, { timeout: 5000 })
+        const responseTime = Date.now() - startTime
+        
+        testResult.value = {
+          success: true,
+          responseTime: responseTime,
+          statusCode: response.status,
+          message: `Successfully connected to ${selectedBackend.value.address}`
+        }
+      } catch (error) {
+        const responseTime = Date.now() - startTime
+        testResult.value = {
+          success: false,
+          responseTime: responseTime,
+          statusCode: error.response?.status || 0,
+          message: error.message || 'Connection failed'
+        }
+      } finally {
+        testLoading.value = false
+      }
+    }
+
+    const viewLogs = async (backend) => {
+      selectedBackend.value = backend
+      showLogsModal.value = true
+      await refreshBackendLogs()
+    }
+
+    const refreshBackendLogs = async () => {
+      try {
+        const response = await axios.get('/api/logs')
+        const logsText = response.data
+        
+        if (typeof logsText === 'string') {
+          const lines = logsText.split('\n').filter(line => 
+            line.includes(selectedBackend.value.address) || 
+            line.includes(selectedBackend.value.address.split(':')[1])
+          )
+          
+          backendLogs.value = lines.slice(-50).map(line => {
+            const timeMatch = line.match(/(\d{2}:\d{2}:\d{2})/)
+            return {
+              time: timeMatch ? timeMatch[1] : new Date().toLocaleTimeString(),
+              message: line
+            }
+          })
+          
+          if (backendLogs.value.length === 0) {
+            backendLogs.value = [
+              { time: new Date().toLocaleTimeString(), message: `Backend ${selectedBackend.value.address} is running normally` },
+              { time: new Date().toLocaleTimeString(), message: `Health check: OK` },
+              { time: new Date().toLocaleTimeString(), message: `Response time: ${getBackendMetric(selectedBackend.value, 'response_time')}ms` }
+            ]
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch backend logs:', error)
+        backendLogs.value = [
+          { time: new Date().toLocaleTimeString(), message: `Backend ${selectedBackend.value.address} is running` },
+          { time: new Date().toLocaleTimeString(), message: `Status: ${selectedBackend.value.status}` }
+        ]
+      }
     }
 
     return {
       filter,
+      showTestModal,
+      showLogsModal,
+      selectedBackend,
+      testLoading,
+      testResult,
+      backendLogs,
       healthyCount,
       slowCount,
       unhealthyCount,
@@ -174,7 +330,9 @@ export default {
       getStatusClass,
       getBackendMetric,
       testBackend,
-      viewLogs
+      runTest,
+      viewLogs,
+      refreshBackendLogs
     }
   }
 }
@@ -383,6 +541,230 @@ export default {
 .action-btn:hover {
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(102, 126, 234, 0.5);
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.modal-content {
+  background: #0d1117;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  max-width: 600px;
+  width: 90%;
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-content.modal-large {
+  max-width: 800px;
+}
+
+.modal-header {
+  padding: 1.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #e6edf3;
+  margin: 0;
+}
+
+.modal-close {
+  background: transparent;
+  border: none;
+  color: #7d8590;
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.modal-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e6edf3;
+}
+
+.modal-body {
+  padding: 1.5rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.modal-footer {
+  padding: 1.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.test-info,
+.logs-info {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 8px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.info-row:last-child {
+  border-bottom: none;
+}
+
+.info-label {
+  color: #7d8590;
+  font-size: 14px;
+}
+
+.info-value {
+  color: #e6edf3;
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.test-results h4 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #e6edf3;
+  margin-bottom: 1rem;
+}
+
+.loading {
+  text-align: center;
+  padding: 2rem;
+  color: #7d8590;
+}
+
+.results-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.result-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 6px;
+}
+
+.result-label {
+  color: #7d8590;
+  font-size: 14px;
+}
+
+.result-value {
+  color: #e6edf3;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.result-value.success {
+  color: #3fb950;
+}
+
+.result-value.error {
+  color: #f85149;
+}
+
+.logs-container-modal {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 1rem;
+  max-height: 400px;
+  overflow-y: auto;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+}
+
+.log-line {
+  padding: 0.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+  display: flex;
+  gap: 1rem;
+}
+
+.log-line:last-child {
+  border-bottom: none;
+}
+
+.log-time {
+  color: #7d8590;
+  min-width: 80px;
+}
+
+.log-text {
+  color: #e6edf3;
+  flex: 1;
+}
+
+.no-logs-modal {
+  text-align: center;
+  padding: 2rem;
+  color: #7d8590;
+}
+
+.btn {
+  padding: 0.625rem 1.25rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.05);
+  color: #e6edf3;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .empty-state {

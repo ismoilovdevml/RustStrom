@@ -27,7 +27,7 @@ const server = http.createServer((req, res) => {
   if (req.url === '/metrics' && req.method === 'GET') {
     const metricsReq = http.request({
       host: '127.0.0.1',
-      port: 9091,
+      port: 9090,
       path: '/metrics',
       method: 'GET'
     }, (metricsRes) => {

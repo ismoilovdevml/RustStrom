@@ -71,12 +71,22 @@ echo "     - Metrics: http://127.0.0.1:9090/metrics"
 sleep 3
 
 echo ""
+echo "🔧 Starting Config API..."
+node ruststrom-dashboard/config-api.cjs > /tmp/config-api.log 2>&1 &
+API_PID=$!
+echo "  ✅ Config API started (PID: $API_PID)"
+echo "     - URL: http://127.0.0.1:9091"
+
+sleep 2
+
+echo ""
 echo "🎨 Starting Dashboard..."
 cd ruststrom-dashboard
 npm run dev > /tmp/dashboard.log 2>&1 &
 DASH_PID=$!
 echo "  ✅ Dashboard starting (PID: $DASH_PID)"
 echo "     - URL: http://localhost:3000"
+cd ..
 
 sleep 5
 

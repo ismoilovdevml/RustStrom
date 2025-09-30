@@ -19,6 +19,7 @@ mod health;
 mod http_client;
 mod listeners;
 mod logging;
+mod metrics;
 mod middleware;
 mod server;
 mod tls;

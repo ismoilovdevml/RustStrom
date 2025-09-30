@@ -40,12 +40,22 @@
           📋
         </button>
       </div>
-      <textarea
-        v-model="editableConfig"
-        class="config-textarea"
-        spellcheck="false"
-        @input="handleInput"
-      ></textarea>
+      <div class="editor-container">
+        <div class="line-numbers">
+          <div v-for="n in lineCount" :key="n" class="line-number">{{ n }}</div>
+        </div>
+        <div class="editor-wrapper">
+          <pre class="syntax-highlight"><code v-html="highlightedCode"></code></pre>
+          <textarea
+            v-model="editableConfig"
+            class="config-textarea"
+            spellcheck="false"
+            @input="handleInput"
+            @scroll="syncScroll"
+            ref="textareaRef"
+          ></textarea>
+        </div>
+      </div>
     </div>
 
     <div class="config-help glass fade-in" style="animation-delay: 0.2s">
@@ -86,6 +96,9 @@
 
 <script>
 import { ref, computed, watch } from 'vue'
+import Prism from 'prismjs'
+import 'prismjs/components/prism-toml'
+import 'prismjs/themes/prism-tomorrow.css'
 
 export default {
   name: 'ConfigTab',
@@ -100,13 +113,26 @@ export default {
     const editableConfig = ref(props.config)
     const originalConfig = ref(props.config)
     const isModified = ref(false)
+    const textareaRef = ref(null)
 
     const lineCount = computed(() => {
       return editableConfig.value.split('\n').length
     })
 
+    const highlightedCode = computed(() => {
+      return Prism.highlight(editableConfig.value, Prism.languages.toml, 'toml')
+    })
+
     const handleInput = () => {
       isModified.value = editableConfig.value !== originalConfig.value
+    }
+
+    const syncScroll = (event) => {
+      const highlights = event.target.previousElementSibling
+      if (highlights) {
+        highlights.scrollTop = event.target.scrollTop
+        highlights.scrollLeft = event.target.scrollLeft
+      }
     }
 
     const saveConfig = () => {
@@ -149,7 +175,10 @@ export default {
       editableConfig,
       isModified,
       lineCount,
+      highlightedCode,
+      textareaRef,
       handleInput,
+      syncScroll,
       saveConfig,
       resetConfig,
       reloadConfig,
@@ -294,12 +323,74 @@ export default {
   background: rgba(255, 255, 255, 0.1);
 }
 
-.config-textarea {
-  width: 100%;
-  min-height: 500px;
+.editor-container {
+  display: flex;
+  gap: 0;
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 8px;
+  overflow: hidden;
+}
+
+.line-numbers {
+  display: flex;
+  flex-direction: column;
+  padding: 1rem 0;
+  background: rgba(0, 0, 0, 0.2);
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  user-select: none;
+}
+
+.line-number {
+  padding: 0 1rem;
+  color: #7d8590;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: right;
+  min-width: 40px;
+}
+
+.editor-wrapper {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+}
+
+.syntax-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  padding: 1rem;
+  margin: 0;
+  background: transparent;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow: auto;
+  pointer-events: none;
+  white-space: pre;
+  word-wrap: normal;
+}
+
+.syntax-highlight code {
+  display: block;
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.config-textarea {
+  position: relative;
+  width: 100%;
+  min-height: 500px;
+  background: transparent;
+  border: none;
   padding: 1rem;
   color: #e6edf3;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
@@ -307,11 +398,32 @@ export default {
   line-height: 1.6;
   resize: vertical;
   outline: none;
+  caret-color: #e6edf3;
+  overflow: auto;
+  white-space: pre;
+  word-wrap: normal;
 }
 
-.config-textarea:focus {
-  border-color: rgba(102, 126, 234, 0.5);
-  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+.config-textarea::-webkit-scrollbar,
+.syntax-highlight::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.config-textarea::-webkit-scrollbar-track,
+.syntax-highlight::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.config-textarea::-webkit-scrollbar-thumb,
+.syntax-highlight::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.config-textarea::-webkit-scrollbar-thumb:hover,
+.syntax-highlight::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .config-help {
@@ -357,5 +469,54 @@ export default {
   font-size: 12px;
   color: #7d8590;
   line-height: 1.5;
+}
+
+/* Prism theme override */
+:deep(.token.comment),
+:deep(.token.prolog),
+:deep(.token.doctype),
+:deep(.token.cdata) {
+  color: #7d8590;
+}
+
+:deep(.token.punctuation) {
+  color: #c9d1d9;
+}
+
+:deep(.token.property),
+:deep(.token.tag),
+:deep(.token.boolean),
+:deep(.token.number),
+:deep(.token.constant),
+:deep(.token.symbol) {
+  color: #79c0ff;
+}
+
+:deep(.token.selector),
+:deep(.token.attr-name),
+:deep(.token.string),
+:deep(.token.char),
+:deep(.token.builtin) {
+  color: #a5d6ff;
+}
+
+:deep(.token.operator),
+:deep(.token.entity),
+:deep(.token.url),
+:deep(.language-css .token.string),
+:deep(.style .token.string),
+:deep(.token.variable) {
+  color: #ff7b72;
+}
+
+:deep(.token.atrule),
+:deep(.token.attr-value),
+:deep(.token.keyword) {
+  color: #ffa657;
+}
+
+:deep(.token.regex),
+:deep(.token.important) {
+  color: #d2a8ff;
 }
 </style>

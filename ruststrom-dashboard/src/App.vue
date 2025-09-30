@@ -29,8 +29,14 @@
         <div class="nav-item" :class="{ active: activeTab === 'metrics' }" @click="activeTab = 'metrics'">
           <span>📈</span> Metrics
         </div>
+        <div class="nav-item" :class="{ active: activeTab === 'advanced' }" @click="activeTab = 'advanced'">
+          <span>📊</span> Advanced
+        </div>
+        <div class="nav-item" :class="{ active: activeTab === 'logs' }" @click="activeTab = 'logs'">
+          <span>📝</span> Logs
+        </div>
         <div class="nav-item" :class="{ active: activeTab === 'config' }" @click="activeTab = 'config'">
-          <span>⚙️</span> Configuration
+          <span>⚙️</span> Config
         </div>
         <div class="nav-item" :class="{ active: activeTab === 'backends' }" @click="activeTab = 'backends'">
           <span>🖥️</span> Backends
@@ -40,6 +46,8 @@
       <main class="content">
         <OverviewTab v-if="activeTab === 'overview'" :metrics="metrics" :backends="backends" />
         <MetricsTab v-if="activeTab === 'metrics'" :metrics="metrics" :history="metricsHistory" />
+        <AdvancedMetricsTab v-if="activeTab === 'advanced'" :history="metricsHistory" />
+        <LogsTab v-if="activeTab === 'logs'" />
         <ConfigTab v-if="activeTab === 'config'" :config="config" @update="updateConfig" @reload="reloadConfig" />
         <BackendsTab v-if="activeTab === 'backends'" :backends="backends" />
       </main>
@@ -52,6 +60,8 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import OverviewTab from './components/OverviewTab.vue'
 import MetricsTab from './components/MetricsTab.vue'
+import AdvancedMetricsTab from './components/AdvancedMetricsTab.vue'
+import LogsTab from './components/LogsTab.vue'
 import ConfigTab from './components/ConfigTab.vue'
 import BackendsTab from './components/BackendsTab.vue'
 
@@ -60,6 +70,8 @@ export default {
   components: {
     OverviewTab,
     MetricsTab,
+    AdvancedMetricsTab,
+    LogsTab,
     ConfigTab,
     BackendsTab
   },
@@ -143,6 +155,21 @@ strategy = { RoundRobin = {} }
           const [, key, value] = match
           result[key] = parseFloat(value)
         }
+      }
+
+      // Calculate average response time from histogram
+      if (result['http_request_duration_seconds_sum'] && result['http_request_duration_seconds_count']) {
+        const avgSeconds = result['http_request_duration_seconds_sum'] / result['http_request_duration_seconds_count']
+        result['avg_response_time_ms'] = avgSeconds * 1000  // Convert to milliseconds
+      }
+
+      // Calculate RPS (requests per second) from history
+      if (metricsHistory.value.length >= 2) {
+        const latest = metricsHistory.value[metricsHistory.value.length - 1]
+        const previous = metricsHistory.value[metricsHistory.value.length - 2]
+        const timeDiff = (latest.timestamp - previous.timestamp) / 1000 // seconds
+        const requestsDiff = (latest.http_requests_total || 0) - (previous.http_requests_total || 0)
+        result['requests_per_second'] = requestsDiff / timeDiff
       }
 
       return result

@@ -10,7 +10,7 @@ use hyper::{
 };
 use std::{
     fmt::Display,
-    io::{self, ErrorKind},
+    io::{self},
 };
 use tokio::io::AsyncRead;
 use tokio_util::{
