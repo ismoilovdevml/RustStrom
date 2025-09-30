@@ -125,7 +125,7 @@ impl MiddlewareChain {
     ) -> Response<Body> {
         match self {
             MiddlewareChain::Entry { middleware, chain } => {
-                middleware.forward_request(request, &chain, &context).await
+                middleware.forward_request(request, chain, context).await
             }
             MiddlewareChain::Empty => {
                 let backend_request = backend_request(request, context);

@@ -69,6 +69,7 @@ impl Compression {
 }
 
 #[derive(Debug, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
 enum Encoding {
     BROTLI,
     DEFLATE,
@@ -127,7 +128,7 @@ fn get_preferred_encoding(headers: &HeaderMap) -> Option<Encoding> {
 
 fn parse_encoding_and_qvalue(encoding_and_qvalue: &str) -> Option<(Encoding, u32)> {
     let (encoding, qvalue) =
-        split_once(encoding_and_qvalue, ';').unwrap_or((encoding_and_qvalue, &"q=1"));
+        split_once(encoding_and_qvalue, ';').unwrap_or((encoding_and_qvalue, "q=1"));
     let encoding = Encoding::from_str(encoding)?;
     let qvalue = parse_qvalue(qvalue)?;
     Some((encoding, qvalue))

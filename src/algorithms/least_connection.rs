@@ -57,7 +57,7 @@ impl LoadBalancingStrategy for LeastConnection {
             // Fall back to random if there's a tie.
             let mut rng = thread_rng();
             let index = rng.gen_range(0..context.backend_addresses.len());
-            RequestForwarder::new(&context.backend_addresses[index])
+            RequestForwarder::new(context.backend_addresses[index])
         }
     }
 }

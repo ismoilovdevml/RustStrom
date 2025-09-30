@@ -40,9 +40,7 @@ impl TryFrom<Table> for CustomErrorPages {
             .as_array()
             .ok_or(())?
             .iter()
-            .map(|x| x.as_integer())
-            .filter(|x| x.is_some())
-            .map(|x| x.unwrap())
+            .filter_map(|x| x.as_integer())
             .map(|x| x as u16)
             .collect::<Vec<_>>();
 

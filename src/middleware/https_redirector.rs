@@ -49,6 +49,7 @@ impl Middleware for HttpsRedirector {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_host_header(request: &Request<Body>) -> Result<Authority, Response<Body>> {
     request
         .headers()

@@ -138,7 +138,7 @@ impl AcmeHandler {
         if !self.is_challenge(request) {
             None
         } else {
-            Some(request.uri().path().split('/').last().map_or_else(
+            Some(request.uri().path().split('/').next_back().map_or_else(
                 || bad_request("Unable to extract token from last path param!"),
                 |token| {
                     self.get_proof_for_challenge(token)

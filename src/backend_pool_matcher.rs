@@ -404,7 +404,7 @@ mod tests {
             Box::new(BackendPoolMatcher::Query("admin".into(), "true".into())),
         );
 
-        assert_eq!(matcher.matches(&request_1), true);
-        assert_eq!(matcher.matches(&request_2), true);
+        assert!(matcher.matches(&request_1));
+        assert!(matcher.matches(&request_2));
     }
 }
