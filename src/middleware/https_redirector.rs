@@ -1,13 +1,13 @@
 use super::{Context, Middleware};
 use crate::{
-  error_response::{bad_request, handle_internal_server_error, internal_server_error},
-  server,
+    error_response::{bad_request, handle_internal_server_error, internal_server_error},
+    server,
 };
 use async_trait::async_trait;
 use hyper::{
-  header::{HOST, LOCATION},
-  http::uri::{Authority, Scheme, Uri},
-  Body, Request, Response, StatusCode,
+    header::{HOST, LOCATION},
+    http::uri::{Authority, Scheme, Uri},
+    Body, Request, Response, StatusCode,
 };
 use log::debug;
 use std::convert::TryFrom;
@@ -17,50 +17,49 @@ pub struct HttpsRedirector;
 
 #[async_trait]
 impl Middleware for HttpsRedirector {
-  async fn modify_request(
-    &self,
-    request: Request<Body>,
-    context: &Context<'_>,
-  ) -> Result<Request<Body>, Response<Body>> {
-    if let server::Scheme::HTTP = context.client_scheme {
-      let host_authority = parse_host_header(&request)?;
+    async fn modify_request(
+        &self,
+        request: Request<Body>,
+        context: &Context<'_>,
+    ) -> Result<Request<Body>, Response<Body>> {
+        if let server::Scheme::HTTP = context.client_scheme {
+            let host_authority = parse_host_header(&request)?;
 
-      let (parts, _body) = request.into_parts();
-      let uri_parts = parts.uri.into_parts();
-      let authority = uri_parts.authority.unwrap_or(host_authority);
-      let path_and_query = uri_parts.path_and_query.ok_or_else(internal_server_error)?;
-      let https_uri = Uri::builder()
-        .scheme(Scheme::HTTPS)
-        .authority(authority)
-        .path_and_query(path_and_query)
-        .build()
-        .map_err(handle_internal_server_error)?;
+            let (parts, _body) = request.into_parts();
+            let uri_parts = parts.uri.into_parts();
+            let authority = uri_parts.authority.unwrap_or(host_authority);
+            let path_and_query = uri_parts.path_and_query.ok_or_else(internal_server_error)?;
+            let https_uri = Uri::builder()
+                .scheme(Scheme::HTTPS)
+                .authority(authority)
+                .path_and_query(path_and_query)
+                .build()
+                .map_err(handle_internal_server_error)?;
 
-      debug!("Redirecting to {}", https_uri);
+            debug!("Redirecting to {}", https_uri);
 
-      return Err(
-        Response::builder()
-          .status(StatusCode::MOVED_PERMANENTLY)
-          .header(LOCATION, https_uri.to_string())
-          .body(Body::empty())
-          .map_err(handle_internal_server_error)?
-      );
+            return Err(Response::builder()
+                .status(StatusCode::MOVED_PERMANENTLY)
+                .header(LOCATION, https_uri.to_string())
+                .body(Body::empty())
+                .map_err(handle_internal_server_error)?);
+        }
+
+        Ok(request)
     }
-
-    Ok(request)
-  }
 }
 
 fn parse_host_header(request: &Request<Body>) -> Result<Authority, Response<Body>> {
-  request
-      .headers()
-      .get(HOST)
-      .ok_or_else(|| bad_request("Missing Host header".to_string()))
-      .and_then(|host| {
-          host.to_str()
-              .map_err(|_| bad_request("Failed to parse Host header".to_string()))
-      })
-      .and_then(|host_str| {
-          Authority::try_from(host_str).map_err(|_| bad_request("Invalid Host header".to_string()))
-      })
+    request
+        .headers()
+        .get(HOST)
+        .ok_or_else(|| bad_request("Missing Host header".to_string()))
+        .and_then(|host| {
+            host.to_str()
+                .map_err(|_| bad_request("Failed to parse Host header".to_string()))
+        })
+        .and_then(|host_str| {
+            Authority::try_from(host_str)
+                .map_err(|_| bad_request("Invalid Host header".to_string()))
+        })
 }

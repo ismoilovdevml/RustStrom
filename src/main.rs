@@ -2,22 +2,22 @@ use arc_swap::{access::Map, ArcSwap};
 use clap::{App, Arg};
 use configuration::{read_initial_config, watch_config, RuntimeConfig};
 use listeners::{AcceptorProducer, Https};
+use prometheus::Encoder;
 use server::Scheme;
 use std::{io, sync::Arc};
 use tls::ReconfigurableCertificateResolver;
 use tokio::try_join;
 use tokio_rustls::rustls::ServerConfig;
 use warp::Filter;
-use prometheus::Encoder;
 
 mod acme;
+mod algorithms;
 mod backend_pool_matcher;
 mod configuration;
 mod error_response;
 mod health;
 mod http_client;
 mod listeners;
-mod algorithms;
 mod logging;
 mod middleware;
 mod server;
@@ -55,49 +55,49 @@ pub async fn main() -> Result<(), io::Error> {
 }
 
 async fn watch_health(config: Arc<ArcSwap<RuntimeConfig>>) -> Result<(), io::Error> {
-  let backend_pools = Map::new(config.clone(), |it: &RuntimeConfig| &it.shared_data.backend_pools);
-  let health_interval = Map::new(config.clone(), |it: &RuntimeConfig| &it.health_interval);
-  health::watch_health(backend_pools, health_interval).await;
-  Ok(())
+    let backend_pools = Map::new(config.clone(), |it: &RuntimeConfig| {
+        &it.shared_data.backend_pools
+    });
+    let health_interval = Map::new(config.clone(), |it: &RuntimeConfig| &it.health_interval);
+    health::watch_health(backend_pools, health_interval).await;
+    Ok(())
 }
 
 async fn listen_for_http_request(config: Arc<ArcSwap<RuntimeConfig>>) -> Result<(), io::Error> {
-  let http = listeners::Http;
-  let address = config.load().http_address;
-  let acceptor = http.produce_acceptor(address).await?;
+    let http = listeners::Http;
+    let address = config.load().http_address;
+    let acceptor = http.produce_acceptor(address).await?;
 
-  server::create(acceptor, config, Scheme::HTTP).await
+    server::create(acceptor, config, Scheme::HTTP).await
 }
 
 async fn listen_for_https_request(config: Arc<ArcSwap<RuntimeConfig>>) -> Result<(), io::Error> {
-  let certificates = Map::new(config.clone(), |it: &RuntimeConfig| &it.certificates);
-  let cert_resolver = ReconfigurableCertificateResolver::new(certificates);
+    let certificates = Map::new(config.clone(), |it: &RuntimeConfig| &it.certificates);
+    let cert_resolver = ReconfigurableCertificateResolver::new(certificates);
 
-  let tls_config = ServerConfig::builder()
-    .with_safe_defaults()
-    .with_no_client_auth()
-    .with_cert_resolver(Arc::new(cert_resolver));
+    let tls_config = ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_cert_resolver(Arc::new(cert_resolver));
 
-  let https = Https { tls_config };
-  let address = config.load().https_address;
-  let acceptor = https.produce_acceptor(address).await?;
+    let https = Https { tls_config };
+    let address = config.load().https_address;
+    let acceptor = https.produce_acceptor(address).await?;
 
-  server::create(acceptor, config, Scheme::HTTPS).await
+    server::create(acceptor, config, Scheme::HTTPS).await
 }
 
 async fn serve_metrics() -> Result<(), io::Error> {
-  // Define a warp filter that responds with the metrics.
-  let metrics_route = warp::path("metrics").map(|| {
-      let encoder = prometheus::TextEncoder::new();
-      let mut buffer = vec![];
-      let metric_families = prometheus::gather();
-      encoder.encode(&metric_families, &mut buffer).unwrap();
-      warp::reply::with_header(buffer, "content-type", encoder.format_type())
-  });
+    // Define a warp filter that responds with the metrics.
+    let metrics_route = warp::path("metrics").map(|| {
+        let encoder = prometheus::TextEncoder::new();
+        let mut buffer = vec![];
+        let metric_families = prometheus::gather();
+        encoder.encode(&metric_families, &mut buffer).unwrap();
+        warp::reply::with_header(buffer, "content-type", encoder.format_type())
+    });
 
-  warp::serve(metrics_route)
-      .run(([0, 0, 0, 0], 9091))
-      .await;
+    warp::serve(metrics_route).run(([0, 0, 0, 0], 9091)).await;
 
-  Ok(())
+    Ok(())
 }

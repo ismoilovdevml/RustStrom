@@ -41,28 +41,35 @@ pub enum BackendPoolMatcher {
 }
 
 impl From<String> for BackendPoolMatcher {
-  fn from(str: String) -> Self {
-      let chars: Vec<char> = str.chars().collect();
-      let result = parser().parse(&chars).unwrap();
-      result
-  }
+    fn from(str: String) -> Self {
+        let chars: Vec<char> = str.chars().collect();
+        let result = parser().parse(&chars).unwrap();
+        result
+    }
 }
 
 impl BackendPoolMatcher {
     /// Simplified matches function
     pub fn matches(&self, request: &Request<Body>) -> bool {
         match self {
-            BackendPoolMatcher::Host(host) => request.headers().get(HOST).map_or(false, |h| h == host),
-            BackendPoolMatcher::HostRegexp(host_regex) => request.headers().get(HOST).map_or(false, |h| host_regex.is_match(h.to_str().unwrap_or(""))),
+            BackendPoolMatcher::Host(host) => {
+                request.headers().get(HOST).map_or(false, |h| h == host)
+            }
+            BackendPoolMatcher::HostRegexp(host_regex) => request
+                .headers()
+                .get(HOST)
+                .map_or(false, |h| host_regex.is_match(h.to_str().unwrap_or(""))),
             BackendPoolMatcher::Method(method) => request.method() == method,
             BackendPoolMatcher::Path(path) => request.uri().path() == path,
             BackendPoolMatcher::PathRegexp(path_regex) => path_regex.is_match(request.uri().path()),
-            BackendPoolMatcher::Query(key, value) => {
-                request.uri().query().map_or(false, |v| {
-                    let query_params: HashMap<_, _> = url::form_urlencoded::parse(v.as_bytes()).into_owned().collect();
-                    query_params.get(key).map_or(false, |sent_value| sent_value == value)
-                })
-            }
+            BackendPoolMatcher::Query(key, value) => request.uri().query().map_or(false, |v| {
+                let query_params: HashMap<_, _> = url::form_urlencoded::parse(v.as_bytes())
+                    .into_owned()
+                    .collect();
+                query_params
+                    .get(key)
+                    .map_or(false, |sent_value| sent_value == value)
+            }),
             BackendPoolMatcher::And(left, right) => left.matches(request) && right.matches(request),
             BackendPoolMatcher::Or(left, right) => left.matches(request) || right.matches(request),
         }
@@ -83,295 +90,321 @@ impl BackendPoolMatcher {
 /// "Host('google.de') && ( Path('/admin') || Path('/moderator') )"
 /// ```
 fn parser<'a>() -> Parser<'a, char, BackendPoolMatcher> {
-  space() * top_level_expression() - end()
+    space() * top_level_expression() - end()
 }
 
 fn string<'a>() -> Parser<'a, char, String> {
-  let special_char = (sym('\\') * sym('\'')) | sym('\\');
+    let special_char = (sym('\\') * sym('\'')) | sym('\\');
 
-  let char_string = (none_of("\\\'") | special_char).repeat(1..).map(String::from_iter);
-  let string = sym('\'') * char_string.repeat(0..) - sym('\'');
-  string.map(|strings| strings.concat())
+    let char_string = (none_of("\\\'") | special_char)
+        .repeat(1..)
+        .map(String::from_iter);
+    let string = sym('\'') * char_string.repeat(0..) - sym('\'');
+    string.map(|strings| strings.concat())
 }
 
 fn host<'a>() -> Parser<'a, char, String> {
-  tag("Host(") * string() - sym(')')
+    tag("Host(") * string() - sym(')')
 }
 
 fn host_regexp<'a>() -> Parser<'a, char, ComparableRegex> {
-  let host_regexp = tag("HostRegexp(") * string() - sym(')');
-  host_regexp.convert(|regex| ComparableRegex::new(&regex))
+    let host_regexp = tag("HostRegexp(") * string() - sym(')');
+    host_regexp.convert(|regex| ComparableRegex::new(&regex))
 }
 
 fn path<'a>() -> Parser<'a, char, String> {
-  tag("Path(") * string() - sym(')')
+    tag("Path(") * string() - sym(')')
 }
 
 fn path_regexp<'a>() -> Parser<'a, char, ComparableRegex> {
-  let path_regexp = tag("PathRegexp(") * string() - sym(')');
-  path_regexp.convert(|regex| ComparableRegex::new(&regex))
+    let path_regexp = tag("PathRegexp(") * string() - sym(')');
+    path_regexp.convert(|regex| ComparableRegex::new(&regex))
 }
 
 fn method<'a>() -> Parser<'a, char, Method> {
-  let method = tag("Method(") * string() - sym(')');
-  method.convert(|method| Method::from_str(&method))
+    let method = tag("Method(") * string() - sym(')');
+    method.convert(|method| Method::from_str(&method))
 }
 
 fn query<'a>() -> Parser<'a, char, (String, String)> {
-  tag("Query(") * string() - space() - sym(',') - space() + string() - sym(')')
+    tag("Query(") * string() - space() - sym(',') - space() + string() - sym(')')
 }
 
 fn and<'a>() -> Parser<'a, char, (BackendPoolMatcher, BackendPoolMatcher)> {
-  call(value) - space() - tag("&&") - space() + call(value)
+    call(value) - space() - tag("&&") - space() + call(value)
 }
 
 fn or<'a>() -> Parser<'a, char, (BackendPoolMatcher, BackendPoolMatcher)> {
-  call(value) - space() - tag("||") - space() + call(value)
+    call(value) - space() - tag("||") - space() + call(value)
 }
 
 fn space<'a>() -> Parser<'a, char, ()> {
-  one_of(" \t\r\n").repeat(0..).discard()
+    one_of(" \t\r\n").repeat(0..).discard()
 }
 
 fn value<'a>() -> Parser<'a, char, BackendPoolMatcher> {
-  host().map(BackendPoolMatcher::Host)
-    | host_regexp().map(BackendPoolMatcher::HostRegexp)
-    | method().map(BackendPoolMatcher::Method)
-    | path().map(BackendPoolMatcher::Path)
-    | path_regexp().map(BackendPoolMatcher::PathRegexp)
-    | query().map(|(key, value)| BackendPoolMatcher::Query(key, value))
-    | (sym('(') * space() * (chained_expression() | call(value)) - space() - sym(')'))
+    host().map(BackendPoolMatcher::Host)
+        | host_regexp().map(BackendPoolMatcher::HostRegexp)
+        | method().map(BackendPoolMatcher::Method)
+        | path().map(BackendPoolMatcher::Path)
+        | path_regexp().map(BackendPoolMatcher::PathRegexp)
+        | query().map(|(key, value)| BackendPoolMatcher::Query(key, value))
+        | (sym('(') * space() * (chained_expression() | call(value)) - space() - sym(')'))
 }
 
 fn chained_expression<'a>() -> Parser<'a, char, BackendPoolMatcher> {
-  and().map(|(left, right)| BackendPoolMatcher::And(Box::new(left), Box::new(right)))
-    | or().map(|(left, right)| BackendPoolMatcher::Or(Box::new(left), Box::new(right)))
+    and().map(|(left, right)| BackendPoolMatcher::And(Box::new(left), Box::new(right)))
+        | or().map(|(left, right)| BackendPoolMatcher::Or(Box::new(left), Box::new(right)))
 }
 
 fn top_level_expression<'a>() -> Parser<'a, char, BackendPoolMatcher> {
-  chained_expression() | value()
+    chained_expression() | value()
 }
 
 #[cfg(test)]
 mod tests {
-  use super::*;
+    use super::*;
 
-  fn to_char_vec(str: &'static str) -> Vec<char> {
-    str.to_string().chars().collect()
-  }
+    fn to_char_vec(str: &'static str) -> Vec<char> {
+        str.to_string().chars().collect()
+    }
 
-  #[test]
-  fn parse_host() {
-    let input = to_char_vec("Host('whatisup.localhost')");
+    #[test]
+    fn parse_host() {
+        let input = to_char_vec("Host('whatisup.localhost')");
 
-    assert_eq!(
-      parser().parse(&input),
-      Ok(BackendPoolMatcher::Host("whatisup.localhost".into()))
-    );
-  }
+        assert_eq!(
+            parser().parse(&input),
+            Ok(BackendPoolMatcher::Host("whatisup.localhost".into()))
+        );
+    }
 
-  #[test]
-  fn parse_escaped_host() {
-    let input = to_char_vec("Host('whatisup\\'.localhost')");
+    #[test]
+    fn parse_escaped_host() {
+        let input = to_char_vec("Host('whatisup\\'.localhost')");
 
-    assert_eq!(
-      parser().parse(&input),
-      Ok(BackendPoolMatcher::Host("whatisup'.localhost".into()))
-    );
-  }
+        assert_eq!(
+            parser().parse(&input),
+            Ok(BackendPoolMatcher::Host("whatisup'.localhost".into()))
+        );
+    }
 
-  #[test]
-  fn parse_empty_host() {
-    let input = to_char_vec("Host('')");
+    #[test]
+    fn parse_empty_host() {
+        let input = to_char_vec("Host('')");
 
-    assert_eq!(parser().parse(&input), Ok(BackendPoolMatcher::Host("".into())));
-  }
+        assert_eq!(
+            parser().parse(&input),
+            Ok(BackendPoolMatcher::Host("".into()))
+        );
+    }
 
-  #[test]
-  fn parse_and() {
-    let input = to_char_vec("Host('whoami.localhost')&&Host('whatisup.localhost')");
+    #[test]
+    fn parse_and() {
+        let input = to_char_vec("Host('whoami.localhost')&&Host('whatisup.localhost')");
 
-    let left = Box::new(BackendPoolMatcher::Host("whoami.localhost".to_string()));
-    let right = Box::new(BackendPoolMatcher::Host("whatisup.localhost".to_string()));
+        let left = Box::new(BackendPoolMatcher::Host("whoami.localhost".to_string()));
+        let right = Box::new(BackendPoolMatcher::Host("whatisup.localhost".to_string()));
 
-    assert_eq!(parser().parse(&input), Ok(BackendPoolMatcher::And(left, right)));
-  }
+        assert_eq!(
+            parser().parse(&input),
+            Ok(BackendPoolMatcher::And(left, right))
+        );
+    }
 
-  #[test]
-  fn parse_nested_single_value_and() {
-    let input = to_char_vec("(Host('whoami.localhost')) && Host('whatisup.localhost')");
+    #[test]
+    fn parse_nested_single_value_and() {
+        let input = to_char_vec("(Host('whoami.localhost')) && Host('whatisup.localhost')");
 
-    let left = Box::new(BackendPoolMatcher::Host("whoami.localhost".to_string()));
-    let right = Box::new(BackendPoolMatcher::Host("whatisup.localhost".to_string()));
+        let left = Box::new(BackendPoolMatcher::Host("whoami.localhost".to_string()));
+        let right = Box::new(BackendPoolMatcher::Host("whatisup.localhost".to_string()));
 
-    assert_eq!(parser().parse(&input), Ok(BackendPoolMatcher::And(left, right)));
-  }
+        assert_eq!(
+            parser().parse(&input),
+            Ok(BackendPoolMatcher::And(left, right))
+        );
+    }
 
-  #[test]
-  fn parse_nested_sub_expression() {
-    let input = to_char_vec("(  Host('1')      || Host('2')   )     &&    Host('3')");
+    #[test]
+    fn parse_nested_sub_expression() {
+        let input = to_char_vec("(  Host('1')      || Host('2')   )     &&    Host('3')");
 
-    let left = Box::new(BackendPoolMatcher::Or(
-      Box::new(BackendPoolMatcher::Host("1".to_string())),
-      Box::new(BackendPoolMatcher::Host("2".to_string())),
-    ));
-    let right = Box::new(BackendPoolMatcher::Host("3".to_string()));
+        let left = Box::new(BackendPoolMatcher::Or(
+            Box::new(BackendPoolMatcher::Host("1".to_string())),
+            Box::new(BackendPoolMatcher::Host("2".to_string())),
+        ));
+        let right = Box::new(BackendPoolMatcher::Host("3".to_string()));
 
-    assert_eq!(parser().parse(&input), Ok(BackendPoolMatcher::And(left, right)));
-  }
+        assert_eq!(
+            parser().parse(&input),
+            Ok(BackendPoolMatcher::And(left, right))
+        );
+    }
 
-  #[test]
-  fn parse_escaped_regex() {
-    let input = to_char_vec("HostRegexp('\\.')");
+    #[test]
+    fn parse_escaped_regex() {
+        let input = to_char_vec("HostRegexp('\\.')");
 
-    let matcher = BackendPoolMatcher::HostRegexp(ComparableRegex::new("\\.").unwrap());
+        let matcher = BackendPoolMatcher::HostRegexp(ComparableRegex::new("\\.").unwrap());
 
-    assert_eq!(parser().parse(&input), Ok(matcher));
-  }
+        assert_eq!(parser().parse(&input), Ok(matcher));
+    }
 
-  #[test]
-  fn parse_method() {
-    let input = to_char_vec("Method('GET')");
-    let custom_input = to_char_vec("Method('YOLO')");
+    #[test]
+    fn parse_method() {
+        let input = to_char_vec("Method('GET')");
+        let custom_input = to_char_vec("Method('YOLO')");
 
-    assert_eq!(parser().parse(&input), Ok(BackendPoolMatcher::Method(Method::GET)));
-    assert_eq!(
-      parser().parse(&custom_input),
-      Ok(BackendPoolMatcher::Method(Method::from_str("YOLO").unwrap()))
-    );
-  }
+        assert_eq!(
+            parser().parse(&input),
+            Ok(BackendPoolMatcher::Method(Method::GET))
+        );
+        assert_eq!(
+            parser().parse(&custom_input),
+            Ok(BackendPoolMatcher::Method(
+                Method::from_str("YOLO").unwrap()
+            ))
+        );
+    }
 
-  #[test]
-  fn parse_query() {
-    let input = to_char_vec("Query('key', 'value')");
+    #[test]
+    fn parse_query() {
+        let input = to_char_vec("Query('key', 'value')");
 
-    assert_eq!(
-      parser().parse(&input),
-      Ok(BackendPoolMatcher::Query("key".into(), "value".into()))
-    );
-  }
+        assert_eq!(
+            parser().parse(&input),
+            Ok(BackendPoolMatcher::Query("key".into(), "value".into()))
+        );
+    }
 
-  #[test]
-  fn matches_host() {
-    let request = Request::builder()
-      .header("Host", "google.de")
-      .body(Body::empty())
-      .unwrap();
-    let matcher = BackendPoolMatcher::Host("google.de".into());
+    #[test]
+    fn matches_host() {
+        let request = Request::builder()
+            .header("Host", "google.de")
+            .body(Body::empty())
+            .unwrap();
+        let matcher = BackendPoolMatcher::Host("google.de".into());
 
-    assert_eq!(matcher.matches(&request), true);
-  }
+        assert_eq!(matcher.matches(&request), true);
+    }
 
-  #[test]
-  fn matches_host_regex() {
-    let request_1 = Request::builder()
-      .header("Host", "google.de")
-      .body(Body::empty())
-      .unwrap();
+    #[test]
+    fn matches_host_regex() {
+        let request_1 = Request::builder()
+            .header("Host", "google.de")
+            .body(Body::empty())
+            .unwrap();
 
-    let request_2 = Request::builder()
-      .header("Host", "www.google.de")
-      .body(Body::empty())
-      .unwrap();
+        let request_2 = Request::builder()
+            .header("Host", "www.google.de")
+            .body(Body::empty())
+            .unwrap();
 
-    let request_3 = Request::builder()
-      .header("Host", "www.youtube.de")
-      .body(Body::empty())
-      .unwrap();
+        let request_3 = Request::builder()
+            .header("Host", "www.youtube.de")
+            .body(Body::empty())
+            .unwrap();
 
-    let matcher = BackendPoolMatcher::HostRegexp(ComparableRegex::new(r#"^(www\.)?google.de$"#).unwrap());
+        let matcher =
+            BackendPoolMatcher::HostRegexp(ComparableRegex::new(r#"^(www\.)?google.de$"#).unwrap());
 
-    assert_eq!(matcher.matches(&request_1), true);
-    assert_eq!(matcher.matches(&request_2), true);
-    assert_eq!(matcher.matches(&request_3), false);
-  }
+        assert_eq!(matcher.matches(&request_1), true);
+        assert_eq!(matcher.matches(&request_2), true);
+        assert_eq!(matcher.matches(&request_3), false);
+    }
 
-  #[test]
-  fn matches_method() {
-    let request_1 = Request::builder().method(Method::GET).body(Body::empty()).unwrap();
-    let request_2 = Request::builder().method(Method::POST).body(Body::empty()).unwrap();
+    #[test]
+    fn matches_method() {
+        let request_1 = Request::builder()
+            .method(Method::GET)
+            .body(Body::empty())
+            .unwrap();
+        let request_2 = Request::builder()
+            .method(Method::POST)
+            .body(Body::empty())
+            .unwrap();
 
-    let matcher = BackendPoolMatcher::Method(Method::GET);
+        let matcher = BackendPoolMatcher::Method(Method::GET);
 
-    assert_eq!(matcher.matches(&request_1), true);
-    assert_eq!(matcher.matches(&request_2), false);
-  }
+        assert_eq!(matcher.matches(&request_1), true);
+        assert_eq!(matcher.matches(&request_2), false);
+    }
 
-  #[test]
-  fn matches_path() {
-    let request_1 = Request::builder()
-      .uri("https://google.de/admin")
-      .body(Body::empty())
-      .unwrap();
-    let request_2 = Request::builder()
-      .uri("https://google.de/")
-      .body(Body::empty())
-      .unwrap();
+    #[test]
+    fn matches_path() {
+        let request_1 = Request::builder()
+            .uri("https://google.de/admin")
+            .body(Body::empty())
+            .unwrap();
+        let request_2 = Request::builder()
+            .uri("https://google.de/")
+            .body(Body::empty())
+            .unwrap();
 
-    let matcher = BackendPoolMatcher::Path("/admin".into());
+        let matcher = BackendPoolMatcher::Path("/admin".into());
 
-    assert_eq!(matcher.matches(&request_1), true);
-    assert_eq!(matcher.matches(&request_2), false);
-  }
+        assert_eq!(matcher.matches(&request_1), true);
+        assert_eq!(matcher.matches(&request_2), false);
+    }
 
-  #[test]
-  fn matches_query() {
-    let request_1 = Request::builder()
-      .uri("https://google.de?admin=true")
-      .body(Body::empty())
-      .unwrap();
-    let request_2 = Request::builder()
-      .uri("https://google.de/")
-      .body(Body::empty())
-      .unwrap();
+    #[test]
+    fn matches_query() {
+        let request_1 = Request::builder()
+            .uri("https://google.de?admin=true")
+            .body(Body::empty())
+            .unwrap();
+        let request_2 = Request::builder()
+            .uri("https://google.de/")
+            .body(Body::empty())
+            .unwrap();
 
-    let matcher = BackendPoolMatcher::Query("admin".into(), "true".into());
+        let matcher = BackendPoolMatcher::Query("admin".into(), "true".into());
 
-    assert_eq!(matcher.matches(&request_1), true);
-    assert_eq!(matcher.matches(&request_2), false);
-  }
+        assert_eq!(matcher.matches(&request_1), true);
+        assert_eq!(matcher.matches(&request_2), false);
+    }
 
-  #[test]
-  fn matches_and() {
-    let request_1 = Request::builder()
-      .uri("https://google.de?admin=true")
-      .header(HOST, "google.de")
-      .body(Body::empty())
-      .unwrap();
-    let request_2 = Request::builder()
-      .uri("https://google.de")
-      .header(HOST, "google.de")
-      .body(Body::empty())
-      .unwrap();
+    #[test]
+    fn matches_and() {
+        let request_1 = Request::builder()
+            .uri("https://google.de?admin=true")
+            .header(HOST, "google.de")
+            .body(Body::empty())
+            .unwrap();
+        let request_2 = Request::builder()
+            .uri("https://google.de")
+            .header(HOST, "google.de")
+            .body(Body::empty())
+            .unwrap();
 
-    let matcher = BackendPoolMatcher::And(
-      Box::new(BackendPoolMatcher::Host("google.de".into())),
-      Box::new(BackendPoolMatcher::Query("admin".into(), "true".into())),
-    );
+        let matcher = BackendPoolMatcher::And(
+            Box::new(BackendPoolMatcher::Host("google.de".into())),
+            Box::new(BackendPoolMatcher::Query("admin".into(), "true".into())),
+        );
 
-    assert_eq!(matcher.matches(&request_1), true);
-    assert_eq!(matcher.matches(&request_2), false);
-  }
+        assert_eq!(matcher.matches(&request_1), true);
+        assert_eq!(matcher.matches(&request_2), false);
+    }
 
-  #[test]
-  fn matches_or() {
-    let request_1 = Request::builder()
-      .uri("https://youtube.de?admin=true")
-      .header(HOST, "youtube.de")
-      .body(Body::empty())
-      .unwrap();
-    let request_2 = Request::builder()
-      .uri("https://google.de")
-      .header(HOST, "google.de")
-      .body(Body::empty())
-      .unwrap();
+    #[test]
+    fn matches_or() {
+        let request_1 = Request::builder()
+            .uri("https://youtube.de?admin=true")
+            .header(HOST, "youtube.de")
+            .body(Body::empty())
+            .unwrap();
+        let request_2 = Request::builder()
+            .uri("https://google.de")
+            .header(HOST, "google.de")
+            .body(Body::empty())
+            .unwrap();
 
-    let matcher = BackendPoolMatcher::Or(
-      Box::new(BackendPoolMatcher::Host("google.de".into())),
-      Box::new(BackendPoolMatcher::Query("admin".into(), "true".into())),
-    );
+        let matcher = BackendPoolMatcher::Or(
+            Box::new(BackendPoolMatcher::Host("google.de".into())),
+            Box::new(BackendPoolMatcher::Query("admin".into(), "true".into())),
+        );
 
-    assert_eq!(matcher.matches(&request_1), true);
-    assert_eq!(matcher.matches(&request_2), true);
-  }
+        assert_eq!(matcher.matches(&request_1), true);
+        assert_eq!(matcher.matches(&request_2), true);
+    }
 }

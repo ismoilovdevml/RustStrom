@@ -57,7 +57,7 @@ print_banner() {
 ║    ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝    ║
 ║                                                       ║
 ║         High-Performance Load Balancer               ║
-║              10x Faster than HAProxy                 ║
+║          Proven Performance - Outperforms HAProxy    ║
 ║                                                       ║
 ╚═══════════════════════════════════════════════════════╝
 EOF
