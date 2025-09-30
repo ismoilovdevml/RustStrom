@@ -16,8 +16,8 @@ impl LoadBalancingStrategy for IPHash {
     fn select_backend<'l>(
         &'l self,
         _request: &Request<Body>,
-        context: &'l Context,
-    ) -> RequestForwarder {
+        context: &'l Context<'l>,
+    ) -> RequestForwarder<'l> {
         let mut hasher = FnvHasher::default();
         context.client_address.ip().hash(&mut hasher);
         let index = (hasher.finish() % (context.backend_addresses.len() as u64)) as usize;

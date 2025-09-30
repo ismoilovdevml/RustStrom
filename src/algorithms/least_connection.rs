@@ -36,8 +36,8 @@ impl LoadBalancingStrategy for LeastConnection {
     fn select_backend<'l>(
         &'l self,
         _request: &Request<Body>,
-        context: &'l Context,
-    ) -> RequestForwarder {
+        context: &'l Context<'l>,
+    ) -> RequestForwarder<'l> {
         let connections = self.connections.read().unwrap();
 
         // Find the address with the least number of connections.

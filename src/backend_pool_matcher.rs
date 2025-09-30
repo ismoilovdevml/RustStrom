@@ -53,22 +53,22 @@ impl BackendPoolMatcher {
     pub fn matches(&self, request: &Request<Body>) -> bool {
         match self {
             BackendPoolMatcher::Host(host) => {
-                request.headers().get(HOST).map_or(false, |h| h == host)
+                request.headers().get(HOST).is_some_and(|h| h == host)
             }
             BackendPoolMatcher::HostRegexp(host_regex) => request
                 .headers()
                 .get(HOST)
-                .map_or(false, |h| host_regex.is_match(h.to_str().unwrap_or(""))),
+                .is_some_and(|h| host_regex.is_match(h.to_str().unwrap_or(""))),
             BackendPoolMatcher::Method(method) => request.method() == method,
             BackendPoolMatcher::Path(path) => request.uri().path() == path,
             BackendPoolMatcher::PathRegexp(path_regex) => path_regex.is_match(request.uri().path()),
-            BackendPoolMatcher::Query(key, value) => request.uri().query().map_or(false, |v| {
+            BackendPoolMatcher::Query(key, value) => request.uri().query().is_some_and(|v| {
                 let query_params: HashMap<_, _> = url::form_urlencoded::parse(v.as_bytes())
                     .into_owned()
                     .collect();
                 query_params
                     .get(key)
-                    .map_or(false, |sent_value| sent_value == value)
+                    .is_some_and(|sent_value| sent_value == value)
             }),
             BackendPoolMatcher::And(left, right) => left.matches(request) && right.matches(request),
             BackendPoolMatcher::Or(left, right) => left.matches(request) || right.matches(request),
@@ -285,7 +285,7 @@ mod tests {
             .unwrap();
         let matcher = BackendPoolMatcher::Host("google.de".into());
 
-        assert_eq!(matcher.matches(&request), true);
+        assert!(matcher.matches(&request));
     }
 
     #[test]
@@ -308,9 +308,9 @@ mod tests {
         let matcher =
             BackendPoolMatcher::HostRegexp(ComparableRegex::new(r#"^(www\.)?google.de$"#).unwrap());
 
-        assert_eq!(matcher.matches(&request_1), true);
-        assert_eq!(matcher.matches(&request_2), true);
-        assert_eq!(matcher.matches(&request_3), false);
+        assert!(matcher.matches(&request_1));
+        assert!(matcher.matches(&request_2));
+        assert!(!matcher.matches(&request_3));
     }
 
     #[test]
@@ -326,8 +326,8 @@ mod tests {
 
         let matcher = BackendPoolMatcher::Method(Method::GET);
 
-        assert_eq!(matcher.matches(&request_1), true);
-        assert_eq!(matcher.matches(&request_2), false);
+        assert!(matcher.matches(&request_1));
+        assert!(!matcher.matches(&request_2));
     }
 
     #[test]
@@ -343,8 +343,8 @@ mod tests {
 
         let matcher = BackendPoolMatcher::Path("/admin".into());
 
-        assert_eq!(matcher.matches(&request_1), true);
-        assert_eq!(matcher.matches(&request_2), false);
+        assert!(matcher.matches(&request_1));
+        assert!(!matcher.matches(&request_2));
     }
 
     #[test]
@@ -360,8 +360,8 @@ mod tests {
 
         let matcher = BackendPoolMatcher::Query("admin".into(), "true".into());
 
-        assert_eq!(matcher.matches(&request_1), true);
-        assert_eq!(matcher.matches(&request_2), false);
+        assert!(matcher.matches(&request_1));
+        assert!(!matcher.matches(&request_2));
     }
 
     #[test]
@@ -382,8 +382,8 @@ mod tests {
             Box::new(BackendPoolMatcher::Query("admin".into(), "true".into())),
         );
 
-        assert_eq!(matcher.matches(&request_1), true);
-        assert_eq!(matcher.matches(&request_2), false);
+        assert!(matcher.matches(&request_1));
+        assert!(!matcher.matches(&request_2));
     }
 
     #[test]

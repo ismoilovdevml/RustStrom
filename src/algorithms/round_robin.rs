@@ -19,8 +19,8 @@ impl LoadBalancingStrategy for RoundRobin {
     fn select_backend<'l>(
         &'l self,
         _request: &Request<Body>,
-        context: &'l Context,
-    ) -> RequestForwarder {
+        context: &'l Context<'l>,
+    ) -> RequestForwarder<'l> {
         let len = context.backend_addresses.len();
         if len == 0 {
             panic!("No backend addresses provided");

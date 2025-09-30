@@ -33,7 +33,7 @@ notify = "4.0"
 openssl-sys = { version = "0.9", features = ["vendored"] }
 pin-project = "1.0"
 pom = "3.2"
-prometheus = "0.13.3"
+prometheus = "0.13.4"
 rand = "0.8"
 regex = "1.4"
 serde = { version = "1.0", features = ["derive"] }

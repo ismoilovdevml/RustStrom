@@ -17,8 +17,8 @@ impl LoadBalancingStrategy for Random {
     fn select_backend<'l>(
         &'l self,
         _request: &Request<Body>,
-        context: &'l Context,
-    ) -> RequestForwarder {
+        context: &'l Context<'l>,
+    ) -> RequestForwarder<'l> {
         let mut rng = thread_rng();
         let index = rng.gen_range(0..context.backend_addresses.len());
         let address = &context.backend_addresses[index];

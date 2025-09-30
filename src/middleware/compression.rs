@@ -47,7 +47,7 @@ impl Compression {
         let (parts, body) = response.into_parts();
 
         let stream =
-            StreamReader::new(body.map_err(|error| io::Error::new(ErrorKind::Other, error)));
+            StreamReader::new(body.map_err(io::Error::other));
 
         let body = match encoding {
             BROTLI => to_body(BrotliEncoder::new(stream)),

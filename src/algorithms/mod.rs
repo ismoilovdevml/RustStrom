@@ -27,8 +27,8 @@ pub trait LoadBalancingStrategy: Send + Sync + std::fmt::Debug {
     fn select_backend<'l>(
         &'l self,
         request: &Request<Body>,
-        context: &'l Context,
-    ) -> RequestForwarder;
+        context: &'l Context<'l>,
+    ) -> RequestForwarder<'l>;
 
     /// Called when a new TCP connection to a backend server opened.
     fn on_tcp_open(&self, _remote: &Uri) {}
@@ -60,7 +60,7 @@ pub struct RequestForwarder<'l> {
 impl<'l> RequestForwarder<'l> {
     /// Constructs a new [`RequestForwarder`] which does not perform a final
     /// response transformation.
-    fn new(address: &str) -> RequestForwarder {
+    fn new(address: &'l str) -> RequestForwarder<'l> {
         RequestForwarder::new_with_response_mapper(address, identity)
     }
 

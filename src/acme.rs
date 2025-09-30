@@ -135,7 +135,7 @@ impl AcmeHandler {
     }
 
     pub fn respond_to_challenge(&self, request: &Request<Body>) -> Option<Response<Body>> {
-        if !self.is_challenge(&request) {
+        if !self.is_challenge(request) {
             None
         } else {
             Some(request.uri().path().split('/').last().map_or_else(
