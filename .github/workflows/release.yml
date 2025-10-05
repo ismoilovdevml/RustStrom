@@ -153,7 +153,7 @@ jobs:
         run: ls -R artifacts/
 
       - name: Create Release with all binaries
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: RustStrom ${{ github.ref_name }}
           body: |
@@ -161,9 +161,16 @@ jobs:
 
             High-Performance Load Balancer built with Rust
 
+            ### 🎉 What's New in This Release
+            - 🔐 **Full SSL/TLS Support**: HTTPS with Let's Encrypt certificates
+            - 🔑 **Multi-Format Keys**: RSA, ECDSA, Ed25519 (PKCS8 & RSA formats)
+            - 🏗️ **ARM64 MUSL Builds**: Universal Linux binaries for all distros
+            - ⚡ **HTTP→HTTPS Redirect**: Automatic SSL enforcement
+            - 🔧 **Production Ready**: Tested on live deployment
+
             ### Installation
 
-            **Linux & macOS:**
+            **One-line install (Linux & macOS):**
             ```bash
             curl -sSL https://raw.githubusercontent.com/ismoilovdevml/RustStrom/main/install.sh | bash
             ```
@@ -174,13 +181,10 @@ jobs:
             - macOS Intel: `rust-strom-macos-x86_64`
             - macOS Apple Silicon: `rust-strom-macos-aarch64`
 
-            ### What's New
-            - 🚀 Pre-built binaries for all platforms
-            - ⚡ Fast installation (seconds instead of minutes)
-            - 🔧 Automatic systemd service setup
-            - 📊 Dashboard support
-
-            See [README](https://github.com/ismoilovdevml/RustStrom#readme) for full documentation.
+            ### 📚 Documentation
+            - [Configuration Guide](https://github.com/ismoilovdevml/RustStrom/blob/main/configs/config.toml)
+            - [SSL Setup Examples](https://github.com/ismoilovdevml/RustStrom#ssl-configuration)
+            - [Full Documentation](https://github.com/ismoilovdevml/RustStrom#readme)
           files: |
             artifacts/rust-strom-linux-x86_64/rust-strom-linux-x86_64
             artifacts/rust-strom-linux-aarch64/rust-strom-linux-aarch64
@@ -188,6 +192,7 @@ jobs:
             artifacts/rust-strom-macos-aarch64/rust-strom-macos-aarch64
           draft: false
           prerelease: false
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
