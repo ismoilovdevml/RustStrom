@@ -5,32 +5,16 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Create GitHub Release
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-    steps:
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: RustStrom ${{ github.ref }}
-          draft: false
-          prerelease: false
-
   # Build release binaries
   build-release:
     name: Build Release Binary
-    needs: create-release
     strategy:
       matrix:
         include:
@@ -80,14 +64,11 @@ jobs:
           cp target/${{ matrix.target }}/release/rust-strom ${{ matrix.name }}
 
       - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ matrix.name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.name }}
-          asset_name: ${{ matrix.name }}
-          asset_content_type: application/octet-stream
 
   # Publish to crates.io (optional)
   publish-crate:
