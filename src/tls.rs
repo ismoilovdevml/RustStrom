@@ -1,9 +1,9 @@
 use arc_swap::access::Access;
-use rustls_pemfile::{certs, rsa_private_keys};
+use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
 use std::{
     collections::HashMap,
     fs::File,
-    io::{self, BufReader, ErrorKind::InvalidData},
+    io::{self, BufReader, ErrorKind::InvalidData, Seek},
     path::Path,
     sync::Arc,
 };
@@ -71,7 +71,13 @@ fn load_key<P>(path: P) -> io::Result<PrivateKey>
 where
     P: AsRef<Path>,
 {
-    let mut keys = load_keys(path)?;
+    let mut keys = load_keys(&path)?;
+    if keys.is_empty() {
+        return Err(io::Error::new(
+            InvalidData,
+            format!("No private keys found in '{}'", path.as_ref().display()),
+        ));
+    }
     Ok(keys.remove(0))
 }
 
@@ -81,13 +87,30 @@ where
 {
     let file = File::open(&path)?;
     let mut reader = BufReader::new(file);
-    let key_der_vec = rsa_private_keys(&mut reader).map_err(|_| {
-        io::Error::new(
-            InvalidData,
-            format!("Invalid RSA key in '{}'", path.as_ref().display()),
-        )
-    })?;
-    Ok(key_der_vec.into_iter().map(PrivateKey).collect())
+
+    // Try RSA keys first
+    let rsa_keys = rsa_private_keys(&mut reader)
+        .map(|keys| keys.into_iter().map(PrivateKey).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    if !rsa_keys.is_empty() {
+        return Ok(rsa_keys);
+    }
+
+    // If no RSA keys found, try PKCS8 format (for ECDSA, Ed25519, etc.)
+    reader.rewind()?;
+    let pkcs8_keys = pkcs8_private_keys(&mut reader)
+        .map(|keys| keys.into_iter().map(PrivateKey).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    if !pkcs8_keys.is_empty() {
+        return Ok(pkcs8_keys);
+    }
+
+    Err(io::Error::new(
+        InvalidData,
+        format!("No valid private keys (RSA or PKCS8) found in '{}'", path.as_ref().display()),
+    ))
 }
 
 pub struct ReconfigurableCertificateResolver<A>
