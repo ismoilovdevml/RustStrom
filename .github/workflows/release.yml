@@ -83,10 +83,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
-      - name: Install cross tool for ARM64 MUSL
-        if: matrix.cross && matrix.os == 'ubuntu-latest'
-        run: |
-          cargo install cross --git https://github.com/cross-rs/cross
+      - name: Install cross for ARM64 cross-compilation
+        if: matrix.cross
+        uses: taiki-e/install-action@cross
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
@@ -101,26 +100,21 @@ jobs:
 
       - name: Build release binary (cross-compile)
         if: matrix.cross
+        env:
+          CROSS_CONTAINER_IN_CONTAINER: true
         run: cross build --release --target ${{ matrix.target }}
 
-      - name: Strip binary (Linux)
-        if: matrix.os == 'ubuntu-latest' && !matrix.cross
-        run: strip target/${{ matrix.target }}/release/rust-strom
-
-      - name: Strip binary (Linux ARM64 cross-compile)
-        if: matrix.cross && matrix.os == 'ubuntu-latest'
-        run: aarch64-linux-gnu-strip target/${{ matrix.target }}/release/rust-strom
-
-      - name: Strip binary (macOS)
-        if: matrix.os == 'macos-latest'
-        run: strip target/${{ matrix.target }}/release/rust-strom
-
-      - name: Verify binary
+      - name: Verify binary (native builds only)
         if: ${{ !matrix.cross }}
         run: |
           ls -lh target/${{ matrix.target }}/release/rust-strom
           file target/${{ matrix.target }}/release/rust-strom
           target/${{ matrix.target }}/release/rust-strom --version || echo "Version check skipped"
+
+      - name: Display binary info (all builds)
+        run: |
+          ls -lh target/${{ matrix.target }}/release/rust-strom
+          file target/${{ matrix.target }}/release/rust-strom || true
 
       - name: Prepare binary for upload
         run: |
