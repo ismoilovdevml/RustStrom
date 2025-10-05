@@ -12,27 +12,74 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Build release binaries
-  build-release:
-    name: Build Release Binary
+  # Step 1: Run tests before building
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --all-features
+
+  # Step 2: Build release binaries (parallel)
+  build:
+    name: Build ${{ matrix.name }}
+    needs: test
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          # Linux
+          # Linux x86_64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             name: rust-strom-linux-x86_64
+            cross: false
+
+          # Linux ARM64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             name: rust-strom-linux-aarch64
-          # macOS
+            cross: true
+
+          # macOS Intel
           - target: x86_64-apple-darwin
             os: macos-latest
             name: rust-strom-macos-x86_64
+            cross: false
+
+          # macOS Apple Silicon
           - target: aarch64-apple-darwin
             os: macos-latest
             name: rust-strom-macos-aarch64
-    runs-on: ${{ matrix.os }}
+            cross: false
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -42,38 +89,134 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools (Linux)
-        if: matrix.os == 'ubuntu-latest' && matrix.target == 'aarch64-unknown-linux-gnu'
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.cross && matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Configure cross-compilation (Linux ARM64)
+        if: matrix.cross && matrix.os == 'ubuntu-latest'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<EOF
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Strip binary (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && !matrix.cross
         run: strip target/${{ matrix.target }}/release/rust-strom
+
+      - name: Strip binary (Linux ARM64 cross-compile)
+        if: matrix.cross && matrix.os == 'ubuntu-latest'
+        run: aarch64-linux-gnu-strip target/${{ matrix.target }}/release/rust-strom
 
       - name: Strip binary (macOS)
         if: matrix.os == 'macos-latest'
         run: strip target/${{ matrix.target }}/release/rust-strom
 
-      - name: Rename binary
+      - name: Verify binary
+        if: ${{ !matrix.cross }}
         run: |
-          cp target/${{ matrix.target }}/release/rust-strom ${{ matrix.name }}
+          ls -lh target/${{ matrix.target }}/release/rust-strom
+          file target/${{ matrix.target }}/release/rust-strom
+          target/${{ matrix.target }}/release/rust-strom --version || echo "Version check skipped"
 
-      - name: Upload Release Asset
+      - name: Prepare binary for upload
+        run: |
+          mkdir -p artifacts
+          cp target/${{ matrix.target }}/release/rust-strom artifacts/${{ matrix.name }}
+          chmod +x artifacts/${{ matrix.name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.name }}
+          path: artifacts/${{ matrix.name }}
+          if-no-files-found: error
+
+  # Step 3: Create GitHub Release and upload all binaries
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Display structure of downloaded files
+        run: ls -R artifacts/
+
+      - name: Create Release with all binaries
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ matrix.name }}
+          name: RustStrom ${{ github.ref_name }}
+          body: |
+            ## RustStrom ${{ github.ref_name }}
+
+            High-Performance Load Balancer built with Rust
+
+            ### Installation
+
+            **Linux & macOS:**
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/ismoilovdevml/RustStrom/main/install.sh | bash
+            ```
+
+            **Or download binary directly:**
+            - Linux x86_64: `rust-strom-linux-x86_64`
+            - Linux ARM64: `rust-strom-linux-aarch64`
+            - macOS Intel: `rust-strom-macos-x86_64`
+            - macOS Apple Silicon: `rust-strom-macos-aarch64`
+
+            ### What's New
+            - 🚀 Pre-built binaries for all platforms
+            - ⚡ Fast installation (seconds instead of minutes)
+            - 🔧 Automatic systemd service setup
+            - 📊 Dashboard support
+
+            See [README](https://github.com/ismoilovdevml/RustStrom#readme) for full documentation.
+          files: |
+            artifacts/rust-strom-linux-x86_64/rust-strom-linux-x86_64
+            artifacts/rust-strom-linux-aarch64/rust-strom-linux-aarch64
+            artifacts/rust-strom-macos-x86_64/rust-strom-macos-x86_64
+            artifacts/rust-strom-macos-aarch64/rust-strom-macos-aarch64
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Publish to crates.io (optional)
-  publish-crate:
+  # Step 4: Publish to crates.io (optional, only if CARGO_TOKEN exists)
+  publish:
     name: Publish to crates.io
-    needs: build-release
+    needs: release
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
