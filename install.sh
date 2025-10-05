@@ -153,8 +153,13 @@ download_ruststrom() {
 
     print_info "Latest version: $LATEST_RELEASE"
 
+    # Determine binary name format
+    BINARY_ASSET="rust-strom-$OS-$ARCH"
+
     # Download binary
-    DOWNLOAD_URL="https://github.com/$REPO/releases/download/$LATEST_RELEASE/rust-strom-$OS-$ARCH"
+    DOWNLOAD_URL="https://github.com/$REPO/releases/download/$LATEST_RELEASE/$BINARY_ASSET"
+
+    print_info "Downloading from: $DOWNLOAD_URL"
 
     if curl -sL --fail "$DOWNLOAD_URL" -o "/tmp/$BINARY_NAME" 2>/dev/null; then
         chmod +x "/tmp/$BINARY_NAME"

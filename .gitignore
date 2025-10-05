@@ -1,1 +1,26 @@
+# Build artifacts
 /target
+*.o
+*.so
+*.dylib
+
+# Server-specific configs
+server-config.toml
+*-config.toml
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+/tmp/

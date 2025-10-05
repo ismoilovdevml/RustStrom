@@ -127,8 +127,14 @@ Get RustStrom up and running in 60 seconds:
 ### One-Line Installation
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/ismoilovdevml/RustStrom/main/installer.sh | bash
+curl -sSL https://raw.githubusercontent.com/ismoilovdevml/RustStrom/main/install.sh | bash
 ```
+
+The installer will:
+- ✅ Download pre-built binary from GitHub Releases (fast!)
+- ✅ Create system user and configuration directories
+- ✅ Set up systemd service (Linux) or launchd (macOS)
+- ✅ Install dashboard dependencies (optional)
 
 ### Basic Configuration
 
