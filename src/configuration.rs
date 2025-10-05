@@ -533,7 +533,6 @@ impl TryFrom<(String, Value)> for Box<dyn Middleware> {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
 pub enum CertificateConfig {
     Local {
         certificate_path: String,
