@@ -2,6 +2,7 @@
 
 # RustStrom - High-Performance Load Balancer Installer
 # Supports: Linux (Ubuntu, Debian, CentOS, Fedora, Arch) and macOS
+# Usage: curl -sSL https://raw.githubusercontent.com/ismoilovdevml/RustStrom/main/installer.sh | bash
 
 set -e
 
@@ -19,6 +20,7 @@ CONFIG_DIR="/etc/rust-strom"
 SERVICE_FILE="/etc/systemd/system/rust-strom.service"
 BINARY_NAME="rust-strom"
 LOG_DIR="/var/log/rust-strom"
+DASHBOARD_DIR="/opt/ruststrom-dashboard"
 
 # Print functions
 print_info() {
@@ -115,17 +117,21 @@ install_dependencies() {
     case $DISTRO in
         ubuntu|debian)
             apt-get update -qq
-            apt-get install -y curl wget ca-certificates > /dev/null 2>&1
+            apt-get install -y curl wget ca-certificates git build-essential > /dev/null 2>&1
             ;;
         centos|fedora|rhel)
-            yum install -y curl wget ca-certificates > /dev/null 2>&1
+            yum install -y curl wget ca-certificates git gcc gcc-c++ make > /dev/null 2>&1
             ;;
         arch)
-            pacman -Sy --noconfirm curl wget ca-certificates > /dev/null 2>&1
+            pacman -Sy --noconfirm curl wget ca-certificates git base-devel > /dev/null 2>&1
             ;;
         macos)
             # macOS typically has these already
-            :
+            if ! command -v brew &> /dev/null; then
+                print_info "Installing Homebrew..."
+                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            fi
+            brew install curl wget git > /dev/null 2>&1 || true
             ;;
     esac
 
@@ -168,7 +174,8 @@ build_from_source() {
     if ! command -v cargo &> /dev/null; then
         print_info "Installing Rust..."
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        source "$HOME/.cargo/env"
+        source "$HOME/.cargo/env" 2>/dev/null || true
+        export PATH="$HOME/.cargo/bin:$PATH"
     fi
 
     # Clone and build
@@ -258,7 +265,7 @@ create_user() {
     if [ "$OS" = "linux" ]; then
         print_info "Creating rust-strom user and group..."
 
-        if ! getent group rust-strom > /dev/null; then
+        if ! getent group rust-strom > /dev/null 2>&1; then
             groupadd --system rust-strom
         fi
 
@@ -360,6 +367,49 @@ EOF
     fi
 }
 
+# Install Dashboard
+install_dashboard() {
+    print_info "Installing Dashboard..."
+
+    # Check if Node.js is installed
+    if ! command -v node &> /dev/null; then
+        print_info "Installing Node.js..."
+        case $DISTRO in
+            ubuntu|debian)
+                curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+                apt-get install -y nodejs
+                ;;
+            centos|fedora|rhel)
+                curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+                yum install -y nodejs
+                ;;
+            arch)
+                pacman -S --noconfirm nodejs npm
+                ;;
+            macos)
+                brew install node
+                ;;
+        esac
+    fi
+
+    # Clone dashboard
+    if [ ! -d "$DASHBOARD_DIR" ]; then
+        TEMP_DIR=$(mktemp -d)
+        cd "$TEMP_DIR"
+        git clone "https://github.com/$REPO.git" > /dev/null 2>&1
+        mv RustStrom/ruststrom-dashboard "$DASHBOARD_DIR"
+        rm -rf "$TEMP_DIR"
+
+        # Install dependencies
+        cd "$DASHBOARD_DIR"
+        npm install > /dev/null 2>&1
+
+        print_success "Dashboard installed to $DASHBOARD_DIR"
+    else
+        print_warning "Dashboard already installed at $DASHBOARD_DIR"
+    fi
+}
+
 # Print installation summary
 print_summary() {
     echo ""
@@ -371,6 +421,7 @@ print_summary() {
     echo "  • Binary: $INSTALL_DIR/$BINARY_NAME"
     echo "  • Config: $CONFIG_DIR/config.toml"
     echo "  • Logs: $LOG_DIR"
+    echo "  • Dashboard: $DASHBOARD_DIR"
     echo ""
     print_info "Next steps:"
     echo "  1. Edit configuration: sudo nano $CONFIG_DIR/config.toml"
@@ -380,15 +431,18 @@ print_summary() {
         echo "  3. Enable on boot: sudo systemctl enable rust-strom"
         echo "  4. Check status: sudo systemctl status rust-strom"
         echo "  5. View logs: sudo journalctl -u rust-strom -f"
+        echo "  6. Start dashboard: cd $DASHBOARD_DIR && npm run dev"
     elif [ "$OS" = "macos" ]; then
         echo "  2. Start service: sudo launchctl load /Library/LaunchDaemons/com.ruststrom.plist"
         echo "  3. Stop service: sudo launchctl unload /Library/LaunchDaemons/com.ruststrom.plist"
         echo "  4. View logs: tail -f $LOG_DIR/rust-strom.log"
+        echo "  5. Start dashboard: cd $DASHBOARD_DIR && npm run dev"
     fi
 
     echo ""
+    print_info "Dashboard URL: http://localhost:3000"
+    print_info "Metrics URL: http://localhost:9090/metrics"
     print_info "Documentation: https://github.com/$REPO"
-    print_info "Benchmarks: Run 'rust-strom --help' for more information"
     echo ""
 }
 
@@ -410,6 +464,7 @@ main() {
         setup_launchd
     fi
 
+    install_dashboard
     print_summary
 }
 
