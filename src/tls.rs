@@ -109,7 +109,10 @@ where
 
     Err(io::Error::new(
         InvalidData,
-        format!("No valid private keys (RSA or PKCS8) found in '{}'", path.as_ref().display()),
+        format!(
+            "No valid private keys (RSA or PKCS8) found in '{}'",
+            path.as_ref().display()
+        ),
     ))
 }
 
