@@ -44,14 +44,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64
-          - target: x86_64-unknown-linux-gnu
+          # Linux x86_64 (Static MUSL - works on all Linux distros)
+          - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             name: rust-strom-linux-x86_64
             cross: false
 
-          # Linux ARM64
-          - target: aarch64-unknown-linux-gnu
+          # Linux ARM64 (Static MUSL - works on all Linux distros)
+          - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             name: rust-strom-linux-aarch64
             cross: true
@@ -77,18 +77,24 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools (Linux ARM64)
-        if: matrix.cross && matrix.os == 'ubuntu-latest'
+      - name: Install MUSL tools
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get install -y musl-tools
 
-      - name: Configure cross-compilation (Linux ARM64)
+      - name: Install cross-compilation tools (ARM64 MUSL)
+        if: matrix.cross && matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          rustup target add aarch64-unknown-linux-musl
+
+      - name: Configure cross-compilation (ARM64 MUSL)
         if: matrix.cross && matrix.os == 'ubuntu-latest'
         run: |
           mkdir -p .cargo
           cat >> .cargo/config.toml <<EOF
-          [target.aarch64-unknown-linux-gnu]
+          [target.aarch64-unknown-linux-musl]
           linker = "aarch64-linux-gnu-gcc"
           EOF
 
