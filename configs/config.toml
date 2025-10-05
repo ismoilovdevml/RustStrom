@@ -144,20 +144,20 @@ window_sec = 1
 # TLS/SSL CERTIFICATES
 # ═══════════════════════════════════════════════════════════════
 
-# Option 1: Local Certificate Files
+# Option 1: Local Certificate Files (use absolute or relative paths)
 # [certificates."example.com"]
-# Local = {
-#     certificate_path = "certs/example.com.crt",
-#     private_key_path = "certs/example.com.key"
-# }
+# type = "Local"
+# certificate_path = "certs/example.com.crt"  # Or "/etc/letsencrypt/live/example.com/fullchain.pem"
+# private_key_path = "certs/example.com.key"  # Or "/etc/letsencrypt/live/example.com/privkey.pem"
+#
+# Supports RSA, ECDSA, and Ed25519 private keys in both RSA and PKCS8 formats
 
 # Option 2: ACME (Let's Encrypt) - Automatic SSL
 # [certificates."example.com"]
-# ACME = {
-#     staging = false,                    # Use production Let's Encrypt
-#     email = "admin@example.com",        # Your email for notifications
-#     persist_dir = "acme-cache"          # Directory to cache certificates
-# }
+# type = "ACME"
+# staging = false                    # Use production Let's Encrypt
+# email = "admin@example.com"        # Your email for notifications
+# persist_dir = "acme-cache"         # Directory to cache certificates
 
 # ═══════════════════════════════════════════════════════════════
 # ADVANCED MIDDLEWARE OPTIONS
