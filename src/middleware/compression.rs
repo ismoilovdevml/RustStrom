@@ -1,96 +1,83 @@
-use crate::utils::split_once;
+//! Compression with v1.1 rules (q-value negotiation, brotli 4 / gzip 5, skip small, binary and
+//! streaming responses, `Vary: Accept-Encoding`), executed by Pingora's compression module.
 
-use super::{Context, Middleware, MiddlewareChain};
-use async_compression::{
-    tokio::bufread::{BrotliEncoder, DeflateEncoder, GzipEncoder},
-    Level,
+use http::{
+    header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE},
+    HeaderMap, StatusCode,
 };
-use async_trait::async_trait;
-use futures::TryStreamExt;
-use hyper::{
-    header::{
-        HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE,
-        CONTENT_TYPE, VARY,
-    },
-    Body, HeaderMap, Method, Request, Response, StatusCode,
+use pingora_core::{
+    modules::http::{compression::ResponseCompression, HttpModuleCtx},
+    protocols::http::compression::Algorithm,
 };
-use std::{
-    fmt::Display,
-    io::{self},
-};
-use tokio::io::AsyncRead;
-use tokio_util::{
-    codec::{BytesCodec, FramedRead},
-    io::StreamReader,
-};
-use Encoding::{BROTLI, DEFLATE, GZIP};
+use pingora_http::{RequestHeader, ResponseHeader};
+use std::sync::OnceLock;
 
-#[derive(Debug)]
-pub struct Compression;
-
-#[async_trait]
-impl Middleware for Compression {
-    async fn forward_request(
-        &self,
-        request: Request<Body>,
-        chain: &MiddlewareChain,
-        context: &Context<'_>,
-    ) -> Response<Body> {
-        let encoding = get_preferred_encoding(request.headers());
-        let is_head = request.method() == Method::HEAD;
-        let mut response = chain.forward_request(request, context).await;
-        // The response varies by Accept-Encoding whether or not we compress it
-        response
-            .headers_mut()
-            .append(VARY, HeaderValue::from_static("accept-encoding"));
-        match encoding {
-            Some(encoding) if !is_head && should_compress(&response) => {
-                self.compress_response(response, &encoding)
-            }
-            _ => response,
-        }
-    }
-}
-
-impl Compression {
-    fn compress_response(&self, response: Response<Body>, encoding: &Encoding) -> Response<Body> {
-        let (parts, body) = response.into_parts();
-
-        let stream = StreamReader::new(body.map_err(io::Error::other));
-
-        let body = match encoding {
-            // Default brotli quality is 11 (archival); 4-5 is the usual on-the-fly setting
-            BROTLI => to_body(BrotliEncoder::with_quality(stream, Level::Precise(4))),
-            DEFLATE => to_body(DeflateEncoder::with_quality(stream, Level::Precise(5))),
-            GZIP => to_body(GzipEncoder::with_quality(stream, Level::Precise(5))),
-        };
-        fn to_body<S>(stream: S) -> hyper::Body
-        where
-            S: AsyncRead + Send + 'static,
-        {
-            Body::wrap_stream(FramedRead::new(stream, BytesCodec::new()))
-        }
-
-        let mut response = Response::from_parts(parts, body);
-        let headers = response.headers_mut();
-        headers.insert(CONTENT_ENCODING, encoding.into());
-        headers.remove(CONTENT_LENGTH);
-        response
-    }
-}
-
+/// Default brotli quality is 11 (archival); 4-5 is the usual on-the-fly setting.
+const BROTLI_LEVEL: u32 = 4;
+const GZIP_LEVEL: u32 = 5;
 /// Responses smaller than this are not worth the CPU time of compressing.
 const MIN_COMPRESS_LENGTH: u64 = 1024;
 
-fn should_compress(response: &Response<Body>) -> bool {
-    let status = response.status();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encoding {
+    Brotli,
+    Gzip,
+}
+
+/// Enables the downstream compression module for this response if the v1.1 rules allow it.
+/// Must be called from `response_filter`, i.e. before the module sees the response header.
+pub fn enable_for_response(
+    modules: &mut HttpModuleCtx,
+    encoding: Encoding,
+    response: &ResponseHeader,
+) -> bool {
+    if !should_compress(response) {
+        return false;
+    }
+    let Some(module) = modules.get_mut::<ResponseCompression>() else {
+        return false;
+    };
+    if !module.is_header_phase() {
+        return false;
+    }
+    let Some(request) = accept_only(encoding) else {
+        return false;
+    };
+    let (algorithm, level) = match encoding {
+        Encoding::Brotli => (Algorithm::Brotli, BROTLI_LEVEL),
+        Encoding::Gzip => (Algorithm::Gzip, GZIP_LEVEL),
+    };
+    module.adjust_algorithm_level(algorithm, level);
+    // Our own negotiation already chose the encoding: hand the module exactly that one
+    module.request_filter(request);
+    true
+}
+
+/// A request header that accepts only `encoding`, to feed the module's negotiation.
+fn accept_only(encoding: Encoding) -> Option<&'static RequestHeader> {
+    static BROTLI: OnceLock<Option<RequestHeader>> = OnceLock::new();
+    static GZIP: OnceLock<Option<RequestHeader>> = OnceLock::new();
+    let (cell, value) = match encoding {
+        Encoding::Brotli => (&BROTLI, "br"),
+        Encoding::Gzip => (&GZIP, "gzip"),
+    };
+    cell.get_or_init(|| {
+        let mut request = RequestHeader::build("GET", b"/", Some(1)).ok()?;
+        request.insert_header(ACCEPT_ENCODING, value).ok()?;
+        Some(request)
+    })
+    .as_ref()
+}
+
+pub fn should_compress(response: &ResponseHeader) -> bool {
+    let status = response.status;
     if status == StatusCode::NO_CONTENT
         || status == StatusCode::NOT_MODIFIED
         || status.is_informational()
     {
         return false;
     }
-    let headers = response.headers();
+    let headers = &response.headers;
     if headers.contains_key(CONTENT_ENCODING) || headers.contains_key(CONTENT_RANGE) {
         return false;
     }
@@ -109,9 +96,8 @@ fn should_compress(response: &Response<Body>) -> bool {
         .is_some_and(is_compressible_content_type)
 }
 
-/// Text based formats compress well; images, video, fonts like woff2 and
-/// archives are already compressed. Streams such as server-sent events must not
-/// be buffered by an encoder.
+/// Text based formats compress well; images, video, fonts like woff2 and archives are already
+/// compressed. Streams such as server-sent events must not be buffered by an encoder.
 fn is_compressible_content_type(content_type: &str) -> bool {
     let mime = content_type
         .split(';')
@@ -139,52 +125,9 @@ fn is_compressible_content_type(content_type: &str) -> bool {
         )
 }
 
-#[derive(Debug, PartialEq)]
-#[allow(clippy::upper_case_acronyms)]
-enum Encoding {
-    BROTLI,
-    DEFLATE,
-    GZIP,
-}
-
-impl Encoding {
-    fn to_str(&self) -> &'static str {
-        match self {
-            BROTLI => "br",
-            DEFLATE => "deflate",
-            GZIP => "gzip",
-        }
-    }
-
-    fn from_str(s: &str) -> Option<Encoding> {
-        match s {
-            "br" => Some(BROTLI),
-            "deflate" => Some(DEFLATE),
-            "gzip" => Some(GZIP),
-            _ => None,
-        }
-    }
-}
-
-impl From<&Encoding> for HeaderValue {
-    fn from(encoding: &Encoding) -> Self {
-        HeaderValue::from_static(encoding.to_str())
-    }
-}
-
-impl Display for Encoding {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.to_str())
-    }
-}
-
-/// Parses the Header `Accept-Encoding` (as definied in [RFC 7231, section 5.3.4: Accept-Encoding](https://tools.ietf.org/html/rfc7231#section-5.3.4))
-/// in the specified `HeaderMap` returning the preferred supported `Encoding` if one exists.
-///
-/// Do determine which `Encoding` is preferred by the client, Quality Values (as defined in [RFC 7231, section 5.3.1: Quality Values](https://tools.ietf.org/html/rfc7231#section-5.3.1)) are used.
-///
-/// The special encoding `*` is not currently supported.
-fn get_preferred_encoding(headers: &HeaderMap) -> Option<Encoding> {
+/// Parses `Accept-Encoding` (RFC 9110 section 12.5.3) and returns the preferred supported
+/// encoding by quality value; on equal quality the first listed wins. `*` is not supported.
+pub fn preferred_encoding(headers: &HeaderMap) -> Option<Encoding> {
     headers
         .get(ACCEPT_ENCODING)?
         .to_str()
@@ -192,32 +135,34 @@ fn get_preferred_encoding(headers: &HeaderMap) -> Option<Encoding> {
         .split(',')
         .map(|it| it.trim())
         .filter_map(parse_encoding_and_qvalue)
-        .rev() // max_by_key returns last of equal elements, so reverse to get the first instead
+        .rev() // max_by_key returns the last of equal elements, so reverse to get the first
         .max_by_key(|(_encoding, qvalue)| *qvalue)
         .map(|(encoding, _qvalue)| encoding)
 }
 
 fn parse_encoding_and_qvalue(encoding_and_qvalue: &str) -> Option<(Encoding, u32)> {
-    let (encoding, qvalue) =
-        split_once(encoding_and_qvalue, ';').unwrap_or((encoding_and_qvalue, "q=1"));
-    let encoding = Encoding::from_str(encoding)?;
-    let qvalue = parse_qvalue(qvalue)?;
+    let (encoding, qvalue) = encoding_and_qvalue
+        .split_once(';')
+        .unwrap_or((encoding_and_qvalue, "q=1"));
+    let encoding = match encoding.trim() {
+        "br" => Encoding::Brotli,
+        "gzip" => Encoding::Gzip,
+        _ => return None,
+    };
+    let qvalue = parse_qvalue(qvalue.trim())?;
     Some((encoding, qvalue))
 }
 
-/// Parses the Quality Value (as defined in [RFC 7231, section 5.3.1: Quality Values](https://tools.ietf.org/html/rfc7231#section-5.3.1)) as an `u32`.
-///
-/// Using `u32` instead of `f32` is possible because the precision is limited to 3 digits after the decimal point.
-/// `u32` has the advantage that it implements `Ord` and not just `PartialOrd` which is important for methods like `max_by_key`.
+/// Quality value as an integer in thousandths, so it implements `Ord`.
 fn parse_qvalue(qvalue: &str) -> Option<u32> {
     let qvalue = qvalue.strip_prefix("q=")?;
-    if qvalue == "1" {
+    if qvalue == "1" || qvalue == "1.0" || qvalue == "1.00" || qvalue == "1.000" {
         Some(1000)
     } else {
-        let qvalue = qvalue
+        let digits = qvalue
             .strip_prefix("0.")
             .filter(|digits| digits.len() <= 3)?;
-        format!("{:0<3}", qvalue)
+        format!("{:0<3}", digits)
             .parse()
             .ok()
             .filter(|qvalue| *qvalue != 0)
@@ -227,63 +172,58 @@ fn parse_qvalue(qvalue: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::HeaderValue;
 
-    fn response(status: u16, content_type: Option<&str>, length: Option<u64>) -> Response<Body> {
-        let mut builder = Response::builder().status(status);
-        if let Some(content_type) = content_type {
-            builder = builder.header(CONTENT_TYPE, content_type);
-        }
-        if let Some(length) = length {
-            builder = builder.header(CONTENT_LENGTH, length);
-        }
-        builder.body(Body::empty()).unwrap()
-    }
-
-    #[test]
-    fn compresses_large_text() {
-        assert!(should_compress(&response(
-            200,
-            Some("text/html; charset=utf-8"),
-            Some(4096)
-        )));
-        assert!(should_compress(&response(
-            200,
-            Some("application/json"),
-            None
-        )));
-    }
-
-    #[test]
-    fn skips_small_binary_and_empty_responses() {
-        assert!(!should_compress(&response(
-            200,
-            Some("application/json"),
-            Some(100)
-        )));
-        assert!(!should_compress(&response(
-            200,
-            Some("image/png"),
-            Some(100_000)
-        )));
-        assert!(!should_compress(&response(
-            200,
-            Some("font/woff2"),
-            Some(100_000)
-        )));
-        assert!(!should_compress(&response(
-            200,
-            Some("text/event-stream"),
-            None
-        )));
-        assert!(!should_compress(&response(204, Some("text/html"), None)));
-        assert!(!should_compress(&response(304, Some("text/html"), None)));
-        assert!(!should_compress(&response(200, None, Some(100_000))));
-    }
-
-    #[test]
-    fn parses_preferred_encoding() {
+    fn accept(value: &'static str) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("gzip;q=0.5, br"));
-        assert_eq!(get_preferred_encoding(&headers), Some(BROTLI));
+        headers.insert(ACCEPT_ENCODING, HeaderValue::from_static(value));
+        headers
+    }
+
+    fn response(content_type: &str, length: Option<&str>) -> ResponseHeader {
+        let mut response = ResponseHeader::build(200, None).unwrap();
+        response
+            .insert_header(CONTENT_TYPE, content_type.to_string())
+            .unwrap();
+        if let Some(length) = length {
+            response
+                .insert_header(CONTENT_LENGTH, length.to_string())
+                .unwrap();
+        }
+        response
+    }
+
+    #[test]
+    fn negotiation_uses_q_values() {
+        assert_eq!(
+            preferred_encoding(&accept("gzip, br")),
+            Some(Encoding::Gzip)
+        );
+        assert_eq!(
+            preferred_encoding(&accept("gzip;q=0.5, br")),
+            Some(Encoding::Brotli)
+        );
+        assert_eq!(
+            preferred_encoding(&accept("br;q=0, gzip")),
+            Some(Encoding::Gzip)
+        );
+        assert_eq!(preferred_encoding(&accept("deflate, identity")), None);
+        assert_eq!(preferred_encoding(&accept("gzip;q=garbage")), None);
+        assert_eq!(preferred_encoding(&HeaderMap::new()), None);
+    }
+
+    #[test]
+    fn compress_rules() {
+        assert!(should_compress(&response("text/html; charset=utf-8", None)));
+        assert!(should_compress(&response("application/json", Some("5000"))));
+        assert!(!should_compress(&response("application/json", Some("100"))));
+        assert!(!should_compress(&response("image/png", Some("5000"))));
+        assert!(!should_compress(&response("text/event-stream", None)));
+        let mut encoded = response("text/html", None);
+        encoded.insert_header(CONTENT_ENCODING, "gzip").unwrap();
+        assert!(!should_compress(&encoded));
+        let mut no_content = response("text/html", None);
+        no_content.set_status(204).unwrap();
+        assert!(!should_compress(&no_content));
     }
 }

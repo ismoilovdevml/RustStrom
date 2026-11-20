@@ -1,154 +1,132 @@
-use arc_swap::access::Access;
-use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
-use std::{
-    collections::HashMap,
-    fs::File,
-    io::{self, BufReader, ErrorKind::InvalidData, Seek},
-    path::Path,
-    sync::Arc,
-};
-use tokio_rustls::rustls::{
-    server::{ClientHello, ResolvesServerCert},
-    sign::{any_supported_type, CertifiedKey},
-    Certificate, PrivateKey, ServerName,
-};
+//! Downstream TLS: certificates per SNI name, chosen during the handshake.
 
-pub fn certified_key_from_acme_certificate(
-    certificate: acme_lib::Certificate,
-) -> Result<CertifiedKey, io::Error> {
-    let cert_der_vec = certs(&mut certificate.certificate().as_bytes())
-        .map_err(|_| io::Error::new(InvalidData, "Invalid certificate"))?;
-    let cert_chain: Vec<Certificate> = cert_der_vec.into_iter().map(Certificate).collect();
-    let private_key = PrivateKey(certificate.private_key_der());
-    let signing_key = any_supported_type(&private_key)
-        .map_err(|_| io::Error::new(InvalidData, "Invalid private key"))?;
-    Ok(CertifiedKey::new(cert_chain, signing_key))
+use crate::state::State;
+use async_trait::async_trait;
+use log::{debug, warn};
+use pingora_core::{
+    listeners::TlsAccept,
+    protocols::tls::TlsRef,
+    tls::{
+        ext,
+        pkey::{PKey, Private},
+        ssl::NameType,
+        x509::X509,
+    },
+};
+use std::{path::Path, sync::Arc};
+
+/// A certificate chain (leaf first) with its private key.
+pub struct CertKey {
+    pub leaf: X509,
+    pub chain: Vec<X509>,
+    pub key: PKey<Private>,
 }
 
-pub fn load_certified_key<P1, P2>(
-    certificate_path: P1,
-    private_key_path: P2,
-) -> Result<CertifiedKey, io::Error>
-where
-    P1: AsRef<Path>,
-    P2: AsRef<Path>,
-{
-    let certificates = load_certs(certificate_path)?;
-    let private_key = load_key(&private_key_path)?;
-    let signing_key = any_supported_type(&private_key).map_err(|_| {
-        io::Error::new(
-            InvalidData,
+impl CertKey {
+    /// Loads PEM files. RSA (PKCS#1), PKCS#8 and EC keys are accepted.
+    pub fn load(certificate_path: &Path, private_key_path: &Path) -> Result<CertKey, String> {
+        let certificate = std::fs::read(certificate_path).map_err(|e| {
             format!(
-                "Invalid private key in '{}'",
-                private_key_path.as_ref().display()
-            ),
-        )
-    })?;
-    Ok(CertifiedKey::new(certificates, signing_key))
-}
-
-fn load_certs<P>(path: P) -> io::Result<Vec<Certificate>>
-where
-    P: AsRef<Path>,
-{
-    let file = File::open(&path).map_err(|e| {
-        io::Error::new(
-            e.kind(),
-            format!("Could not open '{}' due to: {}", path.as_ref().display(), e),
-        )
-    })?;
-    let mut reader = BufReader::new(file);
-    let cert_der_vec = certs(&mut reader).map_err(|_| {
-        io::Error::new(
-            InvalidData,
-            format!("Invalid certificate in '{}'", path.as_ref().display()),
-        )
-    })?;
-    Ok(cert_der_vec.into_iter().map(Certificate).collect())
-}
-
-fn load_key<P>(path: P) -> io::Result<PrivateKey>
-where
-    P: AsRef<Path>,
-{
-    let mut keys = load_keys(&path)?;
-    if keys.is_empty() {
-        return Err(io::Error::new(
-            InvalidData,
-            format!("No private keys found in '{}'", path.as_ref().display()),
-        ));
-    }
-    Ok(keys.remove(0))
-}
-
-fn load_keys<P>(path: P) -> io::Result<Vec<PrivateKey>>
-where
-    P: AsRef<Path>,
-{
-    let file = File::open(&path)?;
-    let mut reader = BufReader::new(file);
-
-    // Try RSA keys first
-    let rsa_keys = rsa_private_keys(&mut reader)
-        .map(|keys| keys.into_iter().map(PrivateKey).collect::<Vec<_>>())
-        .unwrap_or_default();
-
-    if !rsa_keys.is_empty() {
-        return Ok(rsa_keys);
+                "Could not open '{}' due to: {}",
+                certificate_path.display(),
+                e
+            )
+        })?;
+        let key = std::fs::read(private_key_path).map_err(|e| {
+            format!(
+                "Could not open '{}' due to: {}",
+                private_key_path.display(),
+                e
+            )
+        })?;
+        CertKey::from_pem(&certificate, &key).map_err(|e| {
+            format!(
+                "Invalid certificate '{}' or key '{}': {}",
+                certificate_path.display(),
+                private_key_path.display(),
+                e
+            )
+        })
     }
 
-    // If no RSA keys found, try PKCS8 format (for ECDSA, Ed25519, etc.)
-    reader.rewind()?;
-    let pkcs8_keys = pkcs8_private_keys(&mut reader)
-        .map(|keys| keys.into_iter().map(PrivateKey).collect::<Vec<_>>())
-        .unwrap_or_default();
-
-    if !pkcs8_keys.is_empty() {
-        return Ok(pkcs8_keys);
-    }
-
-    Err(io::Error::new(
-        InvalidData,
-        format!(
-            "No valid private keys (RSA or PKCS8) found in '{}'",
-            path.as_ref().display()
-        ),
-    ))
-}
-
-pub struct ReconfigurableCertificateResolver<A>
-where
-    A: Access<HashMap<ServerName, Arc<CertifiedKey>>>,
-{
-    certificates: A,
-}
-
-impl<A> ReconfigurableCertificateResolver<A>
-where
-    A: Access<HashMap<ServerName, Arc<CertifiedKey>>>,
-{
-    pub fn new(certificates: A) -> ReconfigurableCertificateResolver<A> {
-        ReconfigurableCertificateResolver { certificates }
+    pub fn from_pem(certificate_pem: &[u8], key_pem: &[u8]) -> Result<CertKey, String> {
+        let mut certificates = X509::stack_from_pem(certificate_pem)
+            .map_err(|e| format!("invalid certificate PEM: {}", e))?
+            .into_iter();
+        let leaf = certificates
+            .next()
+            .ok_or_else(|| "no certificate found".to_string())?;
+        let chain = certificates.collect();
+        let key = PKey::private_key_from_pem(key_pem)
+            .map_err(|e| format!("invalid private key PEM: {}", e))?;
+        let public = leaf
+            .public_key()
+            .map_err(|e| format!("invalid certificate key: {}", e))?;
+        if !public.public_eq(&key) {
+            return Err("the private key does not belong to the certificate".into());
+        }
+        Ok(CertKey { leaf, chain, key })
     }
 }
 
-impl<A> ResolvesServerCert for ReconfigurableCertificateResolver<A>
-where
-    A: Access<HashMap<ServerName, Arc<CertifiedKey>>> + Send + Sync,
-{
-    fn resolve(&self, client_hello: ClientHello) -> Option<Arc<CertifiedKey>> {
-        if let Some(name) = client_hello.server_name() {
-            let certificates = self.certificates.load();
-            // Convert &str to ServerName to look up in our HashMap
-            if let Ok(server_name) = name.try_into() {
-                // Cheap reference count increment instead of copying the certificate chain
-                certificates.get(&server_name).cloned()
-            } else {
-                None
+/// Picks the certificate for the SNI name of a TLS handshake: exact name first, then the
+/// wildcard of the parent domain. Clients without SNI get no certificate (like v1.1).
+pub struct SniResolver {
+    state: Arc<State>,
+}
+
+impl SniResolver {
+    pub fn new(state: Arc<State>) -> SniResolver {
+        SniResolver { state }
+    }
+
+    pub fn find(&self, server_name: &str) -> Option<Arc<CertKey>> {
+        let name = server_name.trim_end_matches('.').to_ascii_lowercase();
+        let config = self.state.config.load();
+        let dynamic = self.state.dynamic_certificates.load();
+        let exact = config
+            .certificates
+            .get(&name)
+            .or_else(|| dynamic.get(&name))
+            .cloned();
+        exact.or_else(|| {
+            let (_, parent) = name.split_once('.')?;
+            let wildcard = format!("*.{}", parent);
+            config
+                .certificates
+                .get(&wildcard)
+                .or_else(|| dynamic.get(&wildcard))
+                .cloned()
+        })
+    }
+}
+
+#[async_trait]
+impl TlsAccept for SniResolver {
+    async fn certificate_callback(&self, ssl: &mut TlsRef) -> () {
+        let Some(server_name) = ssl.servername(NameType::HOST_NAME).map(str::to_string) else {
+            debug!("TLS client without SNI, no certificate");
+            return;
+        };
+        let Some(cert) = self.find(&server_name) else {
+            debug!("No certificate for SNI '{}'", server_name);
+            return;
+        };
+        if let Err(e) = ext::ssl_use_certificate(ssl, &cert.leaf) {
+            warn!("Could not use certificate for '{}': {}", server_name, e);
+            return;
+        }
+        if let Err(e) = ext::ssl_use_private_key(ssl, &cert.key) {
+            warn!("Could not use private key for '{}': {}", server_name, e);
+            return;
+        }
+        for intermediate in &cert.chain {
+            if let Err(e) = ext::ssl_add_chain_cert(ssl, intermediate) {
+                warn!(
+                    "Could not add chain certificate for '{}': {}",
+                    server_name, e
+                );
             }
-        } else {
-            // This kind of resolver requires SNI
-            None
         }
     }
 }
