@@ -1,0 +1,27 @@
+# Build artifacts
+target/
+release/
+*.log
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Documentation
+*.md
+!README.md
+
+# Test files
+test-*
+benchmark*
+
+# Dashboard
+ruststrom-dashboard/node_modules/
+ruststrom-dashboard/dist/
+
+# OS
+.DS_Store

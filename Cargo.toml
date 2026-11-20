@@ -1,0 +1,78 @@
+[package]
+name = "rust-strom"
+version = "1.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# ACME/SSL - Keep existing (no security issues)
+acme-lib = "0.9.1"
+
+# Core utilities
+arc-swap = "1.2"
+lazy_static = "1.4"
+pin-project = "1.0"
+
+# Async runtime (keep existing stable versions)
+tokio = { version = "1.0", features = ["full"] }
+tokio-util = { version = "0.7.9", features = ["full"] }
+tokio-rustls = "0.24"
+async-compression = { version = "0.4.4", features = ["brotli", "deflate", "gzip", "tokio"] }
+async-stream = "0.3"
+async-trait = "0.1"
+
+# HTTP/Networking (keep existing)
+hyper = { version = "0.14", features = ["client", "server", "http1", "http2", "stream", "runtime", "tcp"] }
+hyper-timeout = "0.4"
+
+# Security and TLS
+rustls-pemfile = "1.0"
+openssl-sys = { version = "0.9", features = ["vendored"] }
+
+# Data structures
+bytes = "1.5.0"
+futures = "0.3"
+futures-util = "0.3"
+fnv = "1.0.7"
+linked-hash-map = "0.5"
+
+# CLI - Keep clap 2.34 to avoid breaking changes
+clap = "2.34"
+toml = { version = "0.5.11", features = ["preserve_order"] }
+serde = { version = "1.0", features = ["derive"] }
+
+# Logging and metrics
+log = "0.4"
+log4rs = "1.0"
+prometheus = "0.14.0"
+
+# File watching - Keep notify 4.0 to avoid breaking changes
+notify = "4.0"
+
+# Authentication
+http-auth-basic = "0.3.3"
+ldap3 = "0.11.3"
+cookie = "0.17"
+
+# Other
+chrono = "0.4"
+gethostname = "0.4.3"
+pom = "3.2"
+rand = "0.8"
+regex = "1.4"
+url = "2.2"
+
+# Allocator: musl's default malloc serialises on a global lock under multi-core load
+mimalloc = { version = "0.1", default-features = false }
+
+
+[profile.release]
+opt-level = 3              # Maximum optimization
+lto = "fat"                # Link-time optimization for better performance
+codegen-units = 1          # Single codegen unit for better optimization
+panic = "unwind"           # A panic kills only the affected connection task, not the whole proxy
+strip = true               # Strip symbols for smaller binary
+
+# [future-incompat-report]
+# frequency = "always"    

@@ -1,0 +1,167 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Step 1: Run tests before building
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "test"
+          cache-on-failure: true
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --all-features
+
+  # Step 2: Build release binaries (parallel)
+  build:
+    name: Build ${{ matrix.name }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64 (Static MUSL - works on all Linux distros)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            name: rust-strom-linux-x86_64
+
+          # macOS Intel
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: rust-strom-macos-x86_64
+
+          # macOS Apple Silicon
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: rust-strom-macos-aarch64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install MUSL tools (Linux x86_64)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          shared-key: "release"
+          cache-on-failure: true
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Verify binary
+        run: |
+          ls -lh target/${{ matrix.target }}/release/rust-strom
+          file target/${{ matrix.target }}/release/rust-strom
+          target/${{ matrix.target }}/release/rust-strom --version || echo "Version check skipped (cross-platform binary)"
+
+      - name: Prepare binary for upload
+        run: |
+          mkdir -p artifacts
+          cp target/${{ matrix.target }}/release/rust-strom artifacts/${{ matrix.name }}
+          chmod +x artifacts/${{ matrix.name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: artifacts/${{ matrix.name }}
+          if-no-files-found: error
+
+  # Step 3: Create GitHub Release and upload all binaries
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure of downloaded files
+        run: ls -R artifacts/
+
+      - name: Create Release with all binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          name: RustStrom ${{ github.ref_name }}
+          body: |
+            ## RustStrom ${{ github.ref_name }}
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) for the full list of changes.
+
+            ### Installation
+
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sudo bash
+            ```
+
+            Or download a binary from the assets below:
+            - `rust-strom-linux-x86_64` (static MUSL)
+            - `rust-strom-macos-x86_64`
+            - `rust-strom-macos-aarch64`
+          files: |
+            artifacts/rust-strom-linux-x86_64/rust-strom-linux-x86_64
+            artifacts/rust-strom-macos-x86_64/rust-strom-macos-x86_64
+            artifacts/rust-strom-macos-aarch64/rust-strom-macos-aarch64
+          draft: false
+          prerelease: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Step 4: Publish to crates.io (optional, only if CARGO_TOKEN exists)
+  publish:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        run: cargo publish --token ${{ secrets.CARGO_TOKEN }}
+        continue-on-error: true

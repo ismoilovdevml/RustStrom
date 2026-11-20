@@ -1,0 +1,435 @@
+<template>
+  <div class="dashboard">
+    <header class="header glass">
+      <div class="header-content">
+        <div class="logo">
+          <div class="logo-icon">⚡</div>
+          <div>
+            <h1>RustStrom</h1>
+            <p class="subtitle">High-Performance Load Balancer</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div class="status-badge" :class="{ 'status-online': isOnline, 'status-offline': !isOnline }">
+            <span class="status-dot"></span>
+            {{ isOnline ? 'Connected' : 'Disconnected' }}
+          </div>
+          <button class="btn btn-primary" @click="refreshData">
+            <span>🔄</span> Refresh
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div class="main-content">
+      <nav class="sidebar glass">
+        <div class="nav-item" :class="{ active: activeTab === 'overview' }" @click="activeTab = 'overview'">
+          <span>📊</span> Overview
+        </div>
+        <div class="nav-item" :class="{ active: activeTab === 'metrics' }" @click="activeTab = 'metrics'">
+          <span>📈</span> Metrics
+        </div>
+        <div class="nav-item" :class="{ active: activeTab === 'advanced' }" @click="activeTab = 'advanced'">
+          <span>📊</span> Advanced
+        </div>
+        <div class="nav-item" :class="{ active: activeTab === 'logs' }" @click="activeTab = 'logs'">
+          <span>📝</span> Logs
+        </div>
+        <div class="nav-item" :class="{ active: activeTab === 'config' }" @click="activeTab = 'config'">
+          <span>⚙️</span> Config
+        </div>
+        <div class="nav-item" :class="{ active: activeTab === 'backends' }" @click="activeTab = 'backends'">
+          <span>🖥️</span> Backends
+        </div>
+      </nav>
+
+      <main class="content">
+        <OverviewTab v-if="activeTab === 'overview'" :metrics="metrics" :backends="backends" />
+        <MetricsTab v-if="activeTab === 'metrics'" :metrics="metrics" :history="metricsHistory" />
+        <AdvancedMetricsTab v-if="activeTab === 'advanced'" :history="metricsHistory" />
+        <LogsTab v-if="activeTab === 'logs'" />
+        <ConfigTab v-if="activeTab === 'config'" :config="config" @update="updateConfig" @reload="reloadConfig" />
+        <BackendsTab v-if="activeTab === 'backends'" :backends="backends" />
+      </main>
+    </div>
+  </div>
+</template>
+
+<script>
+import { ref, onMounted, onUnmounted } from 'vue'
+import axios from 'axios'
+import OverviewTab from './components/OverviewTab.vue'
+import MetricsTab from './components/MetricsTab.vue'
+import AdvancedMetricsTab from './components/AdvancedMetricsTab.vue'
+import LogsTab from './components/LogsTab.vue'
+import ConfigTab from './components/ConfigTab.vue'
+import BackendsTab from './components/BackendsTab.vue'
+
+export default {
+  name: 'App',
+  components: {
+    OverviewTab,
+    MetricsTab,
+    AdvancedMetricsTab,
+    LogsTab,
+    ConfigTab,
+    BackendsTab
+  },
+  setup() {
+    const activeTab = ref('overview')
+    const isOnline = ref(false)
+    const metrics = ref({})
+    const metricsHistory = ref([])
+    const backends = ref([])
+    const config = ref('')
+    let refreshInterval = null
+
+    const fetchMetrics = async () => {
+      try {
+        const response = await axios.get('/api/metrics')
+        const metricsText = response.data
+        const parsed = parsePrometheusMetrics(metricsText)
+        metrics.value = parsed
+        isOnline.value = true
+
+        // Store history with localStorage persistence
+        const historyItem = {
+          timestamp: Date.now(),
+          ...parsed
+        }
+        metricsHistory.value.push(historyItem)
+
+        // Keep last 180 data points = 15 minutes at 5s interval
+        if (metricsHistory.value.length > 180) {
+          metricsHistory.value.shift()
+        }
+
+        // Save to localStorage
+        localStorage.setItem('metricsHistory', JSON.stringify(metricsHistory.value.slice(-180)))
+      } catch (error) {
+        console.error('Failed to fetch metrics:', error)
+        isOnline.value = false
+      }
+    }
+
+    const fetchBackends = async () => {
+      try {
+        // Parse backends from metrics
+        const response = await axios.get('/api/metrics')
+        const metricsText = response.data
+        const backendList = parseBackends(metricsText)
+        backends.value = backendList
+      } catch (error) {
+        console.error('Failed to fetch backends:', error)
+      }
+    }
+
+    const fetchConfig = async () => {
+      try {
+        const response = await axios.get('/api/config')
+        config.value = response.data
+      } catch (error) {
+        console.error('Failed to fetch config:', error)
+        // Fallback to placeholder
+        config.value = `# RustStrom Configuration
+# This is a sample config - replace with actual config endpoint
+
+[[backend_pools]]
+matcher = "Host('example.com')"
+addresses = ["127.0.0.1:8080", "127.0.0.1:8081"]
+schemes = ["HTTP", "HTTPS"]
+strategy = { RoundRobin = {} }
+`
+      }
+    }
+
+    const parsePrometheusMetrics = (text) => {
+      const lines = text.split('\n')
+      const result = {}
+
+      for (const line of lines) {
+        if (line.startsWith('#') || !line.trim()) continue
+
+        const match = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*(?:{[^}]+})?) (.+)$/)
+        if (match) {
+          const [, key, value] = match
+          result[key] = parseFloat(value)
+        }
+      }
+
+      // Calculate average response time from histogram
+      if (result['http_request_duration_seconds_sum'] && result['http_request_duration_seconds_count']) {
+        const avgSeconds = result['http_request_duration_seconds_sum'] / result['http_request_duration_seconds_count']
+        result['avg_response_time_ms'] = avgSeconds * 1000  // Convert to milliseconds
+      }
+
+      // Calculate RPS (requests per second) from history
+      if (metricsHistory.value.length >= 2) {
+        const latest = metricsHistory.value[metricsHistory.value.length - 1]
+        const previous = metricsHistory.value[metricsHistory.value.length - 2]
+        const timeDiff = (latest.timestamp - previous.timestamp) / 1000 // seconds
+        const requestsDiff = (latest.http_requests_total || 0) - (previous.http_requests_total || 0)
+        result['requests_per_second'] = requestsDiff / timeDiff
+      }
+
+      return result
+    }
+
+    const parseBackends = (text) => {
+      const lines = text.split('\n')
+      const backendMap = new Map()
+
+      // Parse backend failures
+      for (const line of lines) {
+        if (line.startsWith('backend_failures_total') && line.includes('backend=')) {
+          const match = line.match(/backend="([^"]+)".*?(\d+\.?\d*)$/)
+          if (match) {
+            const addr = match[1]
+            const failures = parseFloat(match[2])
+            const key = addr
+
+            if (!backendMap.has(key)) {
+              backendMap.set(key, {
+                pool: 'default',
+                address: addr,
+                status: failures > 0 ? 'unhealthy' : 'healthy',
+                failures: failures
+              })
+            }
+          }
+        }
+      }
+
+      // If no backends found from failures, create from test config
+      if (backendMap.size === 0) {
+        const testBackends = [
+          { pool: 'default', address: '127.0.0.1:8080', status: 'healthy', failures: 0 },
+          { pool: 'default', address: '127.0.0.1:8081', status: 'healthy', failures: 0 },
+          { pool: 'default', address: '127.0.0.1:8082', status: 'healthy', failures: 0 }
+        ]
+        return testBackends
+      }
+
+      return Array.from(backendMap.values())
+    }
+
+    const refreshData = async () => {
+      await Promise.all([fetchMetrics(), fetchBackends(), fetchConfig()])
+    }
+
+    const updateConfig = async (newConfig) => {
+      try {
+        await axios.post('/api/config', newConfig, {
+          headers: { 'Content-Type': 'text/plain' }
+        })
+        alert('Configuration updated successfully!')
+      } catch (error) {
+        alert('Failed to update configuration: ' + error.message)
+      }
+    }
+
+    const reloadConfig = async () => {
+      try {
+        await axios.post('/api/reload')
+        alert('Configuration reloaded successfully!')
+        await refreshData()
+      } catch (error) {
+        alert('Failed to reload configuration: ' + error.message)
+      }
+    }
+
+    onMounted(() => {
+      // Load history from localStorage
+      const savedHistory = localStorage.getItem('metricsHistory')
+      if (savedHistory) {
+        try {
+          metricsHistory.value = JSON.parse(savedHistory)
+        } catch (e) {
+          console.error('Failed to load metrics history:', e)
+        }
+      }
+
+      refreshData()
+      // Refresh every 5 seconds
+      refreshInterval = setInterval(fetchMetrics, 5000)
+    })
+
+    onUnmounted(() => {
+      if (refreshInterval) {
+        clearInterval(refreshInterval)
+      }
+    })
+
+    return {
+      activeTab,
+      isOnline,
+      metrics,
+      metricsHistory,
+      backends,
+      config,
+      refreshData,
+      updateConfig,
+      reloadConfig
+    }
+  }
+}
+</script>
+
+<style scoped>
+.dashboard {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  padding: 1.5rem 2rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.header-content {
+  max-width: 1600px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.logo-icon {
+  width: 48px;
+  height: 48px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+}
+
+.logo h1 {
+  font-size: 24px;
+  font-weight: 700;
+  color: #e6edf3;
+  margin: 0;
+}
+
+.subtitle {
+  font-size: 12px;
+  color: #7d8590;
+  margin: 0;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-online .status-dot {
+  background: #3fb950;
+  box-shadow: 0 0 8px #3fb950;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.status-offline .status-dot {
+  background: #f85149;
+}
+
+.btn {
+  padding: 0.625rem 1.25rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  max-width: 1600px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 2rem;
+  gap: 2rem;
+}
+
+.sidebar {
+  width: 240px;
+  height: fit-content;
+  padding: 1rem;
+  border-radius: 12px;
+  position: sticky;
+  top: 100px;
+}
+
+.nav-item {
+  padding: 0.875rem 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 14px;
+  font-weight: 500;
+  color: #7d8590;
+  margin-bottom: 0.5rem;
+}
+
+.nav-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #e6edf3;
+}
+
+.nav-item.active {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.2) 0%, rgba(118, 75, 162, 0.2) 100%);
+  color: #e6edf3;
+  border: 1px solid rgba(102, 126, 234, 0.3);
+}
+
+.content {
+  flex: 1;
+  animation: fadeIn 0.3s ease-out;
+}
+</style>

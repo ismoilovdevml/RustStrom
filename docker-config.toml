@@ -1,0 +1,24 @@
+# Docker Compose demo configuration for RustStrom
+
+# Bind IPv4 explicitly: container networks often have IPv6 disabled
+http_address = "0.0.0.0:80"
+https_address = "0.0.0.0:443"
+
+# Expose metrics outside the container (default is 127.0.0.1:9090).
+# The endpoint is unauthenticated - do not publish port 9090 publicly.
+prometheus_metrics_address = "0.0.0.0:9090"
+
+[health_interval]
+check_every = 10
+
+[[backend_pools]]
+# Path() is an exact match; PathRegexp('^/') matches every request
+matcher = "PathRegexp('^/')"
+addresses = ["backend1:8080", "backend2:8081", "backend3:8082"]
+schemes = ["HTTP"]
+strategy = { RoundRobin = {} }
+
+[backend_pools.health_config]
+slow_threshold = 300
+timeout = 2000
+path = "/"

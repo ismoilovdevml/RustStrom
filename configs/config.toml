@@ -1,0 +1,200 @@
+# ═══════════════════════════════════════════════════════════════
+# RustStrom Configuration File
+# Example configuration - adjust hosts, addresses and paths to your setup
+# ═══════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════
+# NETWORK CONFIGURATION
+# ═══════════════════════════════════════════════════════════════
+
+# HTTP binding address (IPv6 dual-stack - supports both IPv4 and IPv6)
+http_address = "[::]:80"
+
+# HTTPS binding address
+https_address = "[::]:443"
+
+# Prometheus metrics endpoint (default "127.0.0.1:9090").
+# The endpoint is unauthenticated: if you expose it (e.g. "0.0.0.0:9090"
+# for remote scraping), restrict access with a firewall.
+# prometheus_metrics_address = "127.0.0.1:9090"
+
+# ═══════════════════════════════════════════════════════════════
+# HEALTH CHECK CONFIGURATION
+# ═══════════════════════════════════════════════════════════════
+
+[health_interval]
+# How often to check backend server health (in seconds)
+check_every = 10
+
+# ═══════════════════════════════════════════════════════════════
+# BACKEND POOL 1: Example Application
+# ═══════════════════════════════════════════════════════════════
+
+[[backend_pools]]
+# Matcher: Defines which requests go to this pool
+# Options: Host('example.com'), HostRegexp('^.*\.example\.com$'),
+#          Path('/exact/path'), PathRegexp('^/api/'), Method('GET'),
+#          Query('key', 'value')
+# Combine with: &&, || (use parentheses to group, e.g. "Host('a') && (Path('/x') || Path('/y'))")
+# Note: Path() is an exact match; use PathRegexp() for prefixes
+matcher = "Host('whoami.localhost')"
+
+# Backend server addresses
+addresses = ["127.0.0.1:8080", "127.0.0.1:8081", "127.0.0.1:8082"]
+
+# Supported schemes for this pool
+schemes = ["HTTP", "HTTPS"]
+
+# Load balancing strategy
+# Options:
+#   - RoundRobin: Distributes requests evenly across backends
+#   - Random: Random backend selection
+#   - IPHash: Consistent hashing based on client IP
+#   - LeastConnection: Routes to backend with fewest active connections
+#   - StickyCookie: Session persistence using cookies
+strategy = { RoundRobin = {} }
+
+# Health check configuration for this pool
+[backend_pools.health_config]
+slow_threshold = 300  # Mark backend as slow after 300ms
+timeout = 500         # Connection timeout in milliseconds
+path = "/"            # Health check endpoint
+
+# Middleware: HTTPS Redirector
+[backend_pools.middlewares.HttpsRedirector]
+# Automatically redirect HTTP requests to HTTPS
+
+# ═══════════════════════════════════════════════════════════════
+# BACKEND POOL 2: Admin Panel with Rate Limiting
+# ═══════════════════════════════════════════════════════════════
+
+[[backend_pools]]
+matcher = "Host('admin.example.com') && Path('/admin')"
+addresses = ["127.0.0.1:9000"]
+schemes = ["HTTP", "HTTPS"]
+strategy = { RoundRobin = {} }
+
+# Health check
+[backend_pools.health_config]
+slow_threshold = 200
+timeout = 400
+path = "/health"
+
+# Middleware: Rate Limiter (protect against DoS)
+[backend_pools.middlewares.RateLimiter]
+limit = 100       # Maximum 100 requests
+window_sec = 60   # Per 60 seconds (per IP)
+
+# Middleware: Compression
+[backend_pools.middlewares.Compression]
+# Enable gzip/brotli compression for responses
+
+# ═══════════════════════════════════════════════════════════════
+# BACKEND POOL 3: API with Sticky Sessions
+# ═══════════════════════════════════════════════════════════════
+
+[[backend_pools]]
+matcher = "Host('api.example.com')"
+addresses = ["127.0.0.1:3000", "127.0.0.1:3001", "127.0.0.1:3002"]
+schemes = ["HTTP", "HTTPS"]
+
+# Sticky cookie strategy for session persistence.
+# Must be a single inline table (a [backend_pools.strategy.StickyCookie]
+# header table does not parse). `inner` picks the backend for new sessions.
+strategy = { StickyCookie = { cookie_name = "RUSTSTROM_SESSION", http_only = true, secure = true, same_site = "Strict", inner = { RoundRobin = {} } } }
+
+[backend_pools.health_config]
+slow_threshold = 250
+timeout = 500
+path = "/api/health"
+
+# Middleware: Max Body Size (prevent large uploads)
+[backend_pools.middlewares.MaxBodySize]
+limit = 10485760  # 10MB max request body
+
+# Middleware: Compression
+[backend_pools.middlewares.Compression]
+
+# ═══════════════════════════════════════════════════════════════
+# BACKEND POOL 4: Microservices with Least Connection
+# ═══════════════════════════════════════════════════════════════
+
+[[backend_pools]]
+matcher = "Host('services.example.com')"
+addresses = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]
+schemes = ["HTTP", "HTTPS"]
+
+# LeastConnection: Routes to backend with fewest active connections
+strategy = { LeastConnection = {} }
+
+[backend_pools.health_config]
+slow_threshold = 300
+timeout = 500
+path = "/"
+
+# Connection pool settings (optional, for advanced tuning)
+[backend_pools.client]
+pool_idle_timeout = { secs = 90, nanos = 0 }  # Keep-alive timeout
+pool_max_idle_per_host = 32                    # Max idle connections per backend
+
+# Middleware: Rate Limiter
+[backend_pools.middlewares.RateLimiter]
+limit = 1000
+window_sec = 1
+
+# Middleware: Compression
+[backend_pools.middlewares.Compression]
+
+# ═══════════════════════════════════════════════════════════════
+# TLS/SSL CERTIFICATES
+# ═══════════════════════════════════════════════════════════════
+
+# Option 1: Local Certificate Files (use absolute or relative paths)
+# [certificates."example.com"]
+# type = "Local"
+# certificate_path = "certs/example.com.crt"  # Or "/etc/letsencrypt/live/example.com/fullchain.pem"
+# private_key_path = "certs/example.com.key"  # Or "/etc/letsencrypt/live/example.com/privkey.pem"
+#
+# Supports RSA, ECDSA, and Ed25519 private keys in both RSA and PKCS8 formats
+
+# Option 2: ACME (Let's Encrypt)
+# Limitations: the certificate is requested on the first config reload, not at
+# startup (touch this file once port 80 is reachable), and it is not renewed
+# automatically - a new one is only ordered on a reload after it has expired.
+# [certificates."example.com"]
+# type = "ACME"
+# staging = false                    # Use production Let's Encrypt
+# email = "admin@example.com"        # Your email for notifications
+# persist_dir = "acme-cache"         # Directory to cache certificates
+
+# ═══════════════════════════════════════════════════════════════
+# ADVANCED MIDDLEWARE OPTIONS
+# ═══════════════════════════════════════════════════════════════
+
+# Authentication (LDAP)
+# [backend_pools.middlewares.Authentication]
+# ldap_address = "ldap://ldap.example.com:389"
+# user_directory = "ou=users,dc=example,dc=com"
+# rdn_identifier = "uid"
+# recursive = true
+
+# Custom Error Pages
+# Pages are read from <location>/<code>.html once, when the config is loaded
+# (e.g. /var/www/errors/404.html, /var/www/errors/502.html).
+# [backend_pools.middlewares.CustomErrorPages]
+# location = "/var/www/errors"
+# errors = [404, 502]
+
+# ═══════════════════════════════════════════════════════════════
+# TUNING TIPS
+# ═══════════════════════════════════════════════════════════════
+#
+# 1. Use LeastConnection when request durations vary a lot (e.g. SSE)
+# 2. Use IPHash when backend servers maintain session state
+# 3. Use StickyCookie for session persistence without backend state
+# 4. Enable Compression for text-based responses (HTML, JSON, CSS, JS)
+# 5. Set appropriate health check intervals (10-30 seconds recommended)
+# 6. Adjust pool_idle_timeout based on your backend's keep-alive settings
+# 7. Monitor slow_threshold to detect performance issues early
+#
+# ═══════════════════════════════════════════════════════════════
