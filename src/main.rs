@@ -15,7 +15,7 @@ mod tls;
 mod upstream;
 
 use clap::{Arg, ArgAction, Command};
-use log::{info, warn};
+use log::info;
 use pingora_core::{
     listeners::tls::TlsSettings,
     server::{configuration::Opt, configuration::ServerConf, Server},
@@ -87,17 +87,6 @@ fn run() -> Result<(), String> {
     let https_address = config.https_address.to_string();
     let metrics_address = config.metrics_address.to_string();
     let process = config.process.clone();
-    if !config.acme.is_empty() {
-        warn!(
-            "ACME certificates are configured ({}), but this build has no ACME client wired in yet; those names are served without a certificate",
-            config
-                .acme
-                .iter()
-                .map(|a| a.domain.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
     let state = Arc::new(state::State::new(
         config,
         metrics,
@@ -167,10 +156,20 @@ fn run() -> Result<(), String> {
         },
     );
 
-    server.add_service(proxy);
+    let acme = background_service(
+        "acme",
+        acme::AcmeService {
+            state: state.clone(),
+        },
+    );
+
+    let proxy_handle = server.add_service(proxy);
     server.add_service(metrics_service);
     server.add_service(health);
     server.add_service(watcher);
     server.add_service(drain);
+    // Orders start only once the HTTP listener can answer the HTTP-01 challenges
+    let acme_handle = server.add_service(acme);
+    acme_handle.add_dependency(&proxy_handle);
     server.run_forever();
 }

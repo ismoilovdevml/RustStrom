@@ -1,7 +1,7 @@
 //! The data plane: RustStrom's [`ProxyHttp`] implementation.
 
 use crate::{
-    acme::CHALLENGE_PREFIX,
+    acme::CHALLENGE_PATH_PREFIX,
     middleware::{compression, https_redirector, RequestStep},
     state::State,
     upstream::{Backend, CounterGuard, Pool, Scheme},
@@ -390,14 +390,11 @@ impl ProxyHttp for Proxy {
             return Ok(true);
         }
 
-        // ACME HTTP-01, before routing and before any middleware
-        if let Some(token) = session
-            .req_header()
-            .uri
-            .path()
-            .strip_prefix(CHALLENGE_PREFIX)
-        {
-            if let Some(proof) = self.state.challenges.get(token) {
+        // ACME HTTP-01, before routing and before any middleware. Without ACME certificates in
+        // the config the path is proxied, so backends can run their own ACME client.
+        let path = session.req_header().uri.path();
+        if path.starts_with(CHALLENGE_PATH_PREFIX) {
+            if let Some(proof) = self.state.challenges.response_for_path(path) {
                 let mut response = ResponseHeader::build(200, Some(2))?;
                 response.insert_header(CONTENT_TYPE, "text/plain")?;
                 response.insert_header(CONTENT_LENGTH, proof.len().to_string())?;

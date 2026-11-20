@@ -5,7 +5,13 @@ edition = "2021"
 description = "RustStrom - HTTP(S) load balancer on Cloudflare Pingora"
 license = "MIT"
 
+[workspace]
+members = [".", "crates/ruststrom-acme"]
+
 [dependencies]
+# ACME client (HTTP-01), see src/acme.rs
+ruststrom-acme = { path = "crates/ruststrom-acme" }
+
 # Data plane
 pingora-core = { version = "0.9.1", default-features = false, features = ["openssl"] }
 pingora-proxy = { version = "0.9.1", default-features = false, features = ["openssl"] }
