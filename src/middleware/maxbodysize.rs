@@ -67,6 +67,7 @@ mod tests {
         let client_address: SocketAddr = "127.0.0.1:1".parse().unwrap();
         let context = Context {
             client_scheme: &Scheme::HTTP,
+            listener_port: 80,
             client_address: &client_address,
             backend_uri: "http://127.0.0.1:2/".parse().unwrap(),
             client: &client,
