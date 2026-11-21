@@ -39,6 +39,8 @@ pub struct RuntimeConfig {
     pub health_interval: Duration,
     /// Maximum in-flight requests of the whole process (0 = unlimited).
     pub max_connections: usize,
+    /// Deadlines for slow clients.
+    pub client: ClientTimeouts,
     /// Settings that only take effect at startup.
     pub process: ProcessSettings,
 }
@@ -51,6 +53,35 @@ pub struct ProcessSettings {
     pub upgrade_sock: String,
     pub pid_file: String,
     pub max_retries: usize,
+}
+
+/// Protection against slow clients (slowloris and slow bodies).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientTimeouts {
+    /// Total time for an HTTP/1 request head, from its first byte.
+    pub header_timeout: Duration,
+    /// Maximum pause between two reads of a request body.
+    pub body_idle_timeout: Duration,
+    /// Minimum average request body rate in bytes/s, enforced after
+    /// [`BODY_MIN_RATE_GRACE`]; 0 disables it.
+    pub body_min_rate: u64,
+    /// An HTTP/2 connection without an open stream is closed after this (also bounds a client
+    /// that never completes a HEADERS frame). Read at startup.
+    pub h2_idle_timeout: Duration,
+}
+
+/// The body rate is only judged after this much time, so slow starts are fine.
+pub const BODY_MIN_RATE_GRACE: Duration = Duration::from_secs(10);
+
+impl Default for ClientTimeouts {
+    fn default() -> Self {
+        ClientTimeouts {
+            header_timeout: Duration::from_secs(30),
+            body_idle_timeout: Duration::from_secs(60),
+            body_min_rate: 500,
+            h2_idle_timeout: Duration::from_secs(60),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -165,8 +196,39 @@ fn build(
         }
     }
 
+    let defaults = ClientTimeouts::default();
+    let positive_ms = |name: &str, value: Option<u64>, default: Duration| match value {
+        Some(0) => Err(format!("{} must be greater than 0", name)),
+        Some(ms) => Ok(Duration::from_millis(ms)),
+        None => Ok(default),
+    };
+    let client = ClientTimeouts {
+        header_timeout: positive_ms(
+            "client_header_timeout_ms",
+            config.client_header_timeout_ms,
+            defaults.header_timeout,
+        )?,
+        body_idle_timeout: positive_ms(
+            "client_body_idle_timeout_ms",
+            config.client_body_idle_timeout_ms,
+            defaults.body_idle_timeout,
+        )?,
+        body_min_rate: config
+            .client_body_min_rate
+            .unwrap_or(defaults.body_min_rate),
+        h2_idle_timeout: positive_ms(
+            "h2_idle_timeout_ms",
+            config.h2_idle_timeout_ms,
+            defaults.h2_idle_timeout,
+        )?,
+    };
+    if config.health_interval.check_every == 0 {
+        warn!("health_interval.check_every = 0: active health checks are disabled, only failed connects mark backends down (they are retried after 10 s)");
+    }
+
     let router = Router::new(&pools);
     Ok(RuntimeConfig {
+        client,
         http_address,
         https_address,
         metrics_address,
@@ -392,6 +454,10 @@ struct TomlConfig {
     upstream_keepalive_pool_size: Option<usize>,
     upgrade_sock: Option<String>,
     pid_file: Option<String>,
+    client_header_timeout_ms: Option<u64>,
+    client_body_idle_timeout_ms: Option<u64>,
+    client_body_min_rate: Option<u64>,
+    h2_idle_timeout_ms: Option<u64>,
 }
 
 impl TomlConfig {

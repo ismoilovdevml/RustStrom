@@ -123,6 +123,14 @@ impl Metrics {
             .ok()
     }
 
+    /// Drops the per-backend series of a backend that is no longer configured.
+    pub fn remove_backend(&self, address: &str) {
+        // Err only means the series did not exist
+        let _ = self.backend_response_time.remove_label_values(&[address]);
+        let _ = self.backend_failures.remove_label_values(&[address]);
+        let _ = self.backend_health.remove_label_values(&[address]);
+    }
+
     /// Text exposition of all metrics.
     pub fn encode(&self) -> Result<(String, Vec<u8>), prometheus::Error> {
         let encoder = TextEncoder::new();
@@ -154,6 +162,23 @@ mod tests {
         assert_eq!(format_status(200, &mut buffer), Some("200"));
         assert_eq!(format_status(504, &mut buffer), Some("504"));
         assert_eq!(format_status(42, &mut buffer), None);
+    }
+
+    #[test]
+    fn removed_backend_series_disappear() {
+        let metrics = Metrics::new().unwrap();
+        metrics
+            .backend_failures
+            .with_label_values(&["10.0.0.1:80"])
+            .inc();
+        metrics
+            .backend_health
+            .with_label_values(&["10.0.0.1:80"])
+            .set(2);
+        metrics.remove_backend("10.0.0.1:80");
+        metrics.remove_backend("never-existed:1");
+        let (_, body) = metrics.encode().unwrap();
+        assert!(!String::from_utf8(body).unwrap().contains("10.0.0.1:80"));
     }
 
     #[test]

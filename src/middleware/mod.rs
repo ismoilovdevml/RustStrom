@@ -80,12 +80,18 @@ impl Middlewares {
                         Some(rdn_identifier),
                         Some(recursive),
                     ) => {
+                        // v2: optional bound on concurrent LDAP exchanges
+                        let max_concurrent = integer(&t, "max_concurrent")
+                            .and_then(|v| usize::try_from(v).ok())
+                            .filter(|v| *v > 0)
+                            .unwrap_or(authentication::DEFAULT_MAX_CONCURRENT);
                         self.request_steps
                             .push(RequestStep::Authentication(Box::new(Authentication::new(
                                 ldap_address,
                                 user_directory,
                                 rdn_identifier,
                                 recursive,
+                                max_concurrent,
                             ))));
                         true
                     }

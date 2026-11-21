@@ -47,7 +47,7 @@ class H(http.server.BaseHTTPRequestHandler):
             self.send_response(404); self.send_header("content-type", "text/plain")
             self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
             return
-        body = json.dumps({k.lower(): v for k, v in self.headers.items()} | {"_all_real_ip": self.headers.get_all("x-real-ip"), "_backend": NAME, "_path": self.path}).encode()
+        body = json.dumps({k.lower(): v for k, v in self.headers.items()} | {"_all_real_ip": self.headers.get_all("x-real-ip"), "_all_host": self.headers.get_all("host"), "_backend": NAME, "_path": self.path}).encode()
         self.send_response(200); self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
     do_GET = do_POST = do_OPTIONS = do_PUT = do_DELETE = _reply
@@ -68,6 +68,8 @@ prometheus_metrics_address = "127.0.0.1:20090"
 threads = 4
 grace_period_secs = 10
 upgrade_sock = "$D/upgrade.sock"
+client_body_idle_timeout_ms = 2000
+h2_idle_timeout_ms = 3000
 pid_file = "$D/ruststrom.pid"
 [health_interval]
 check_every = 1
@@ -79,6 +81,12 @@ schemes = ["HTTP"]
 strategy = { RoundRobin = {} }
 [backend_pools.health_config]
 fall = 1000
+
+[[backend_pools]]
+matcher = "Host('only-b2.test')"
+addresses = ["127.0.0.1:20082"]
+schemes = ["HTTP", "HTTPS"]
+strategy = { RoundRobin = {} }
 
 [[backend_pools]]
 matcher = "Host('features.test')"
@@ -250,6 +258,91 @@ print(head.split(b"\r\n")[0].decode(), rest[:5].decode())
 EOF
 )
 echo "$WS" | grep -q "101" && echo "$WS" | grep -q "hello" && ok "WebSocket upgrade proxied, bytes echoed ($WS)" || bad "websocket: $WS"
+
+# 12b. Slow clients after the request head
+cat > slow.py <<'EOF'
+import socket, ssl, sys, time
+def h1(trickle):
+    s = socket.create_connection(("127.0.0.1", 20080), timeout=30)
+    s.sendall(b"POST / HTTP/1.1\r\nHost: only-b2.test\r\nContent-Length: 100000\r\n\r\n")
+    start = time.time(); data = b""
+    s.settimeout(1.0)
+    while time.time() - start < 25:
+        if trickle:
+            try: s.sendall(b"x")
+            except OSError: break
+        try:
+            chunk = s.recv(4096)
+            if not chunk: break
+            data += chunk
+            if b"\r\n\r\n" in data: break
+        except socket.timeout: pass
+    status = data.split(b"\r\n")[0].decode(errors="replace") or "closed"
+    print("%s after %.1fs" % (status, time.time() - start))
+def h2_slow_headers():
+    ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+    ctx.set_alpn_protocols(["h2"])
+    s = ctx.wrap_socket(socket.create_connection(("127.0.0.1", 20443), timeout=30), server_hostname="lb.test")
+    assert s.selected_alpn_protocol() == "h2", s.selected_alpn_protocol()
+    s.sendall(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" + b"\x00\x00\x00\x04\x00\x00\x00\x00\x00")
+    # HEADERS frame for stream 1 announcing 200 bytes, then the payload one byte per second
+    s.sendall(b"\x00\x00\xc8\x01\x05\x00\x00\x00\x01")
+    start = time.time(); s.settimeout(1.0)
+    while time.time() - start < 25:
+        try: s.sendall(b"\x00")
+        except OSError: break
+        try:
+            if not s.recv(4096) and True: break
+        except socket.timeout: pass
+        except (ssl.SSLError, OSError): break
+    print("closed after %.1fs" % (time.time() - start))
+{"idle": lambda: h1(False), "trickle": lambda: h1(True), "h2": h2_slow_headers}[sys.argv[1]]()
+EOF
+R=$(python3 slow.py idle)
+echo "$R" | grep -q "408" && [ "$(echo "$R" | awk '{print int($(NF))}')" -le 5 ] && ok "h1 body never sent: $R (client_body_idle_timeout_ms = 2000)" || bad "idle body: $R"
+R=$(python3 slow.py trickle)
+T=$(echo "$R" | sed -E 's/.* after ([0-9]+)\..*/\1/')
+echo "$R" | grep -q "408" && [ "$T" -ge 9 ] && [ "$T" -le 14 ] && ok "h1 body trickled 1 byte/s: $R (min rate 500 B/s after 10 s)" || bad "trickled body: $R"
+R=$(python3 slow.py h2)
+T=$(echo "$R" | sed -E 's/.* after ([0-9]+)\..*/\1/')
+[ "$T" -le 6 ] && ok "h2 HEADERS trickled 1 byte/s: connection $R (h2_idle_timeout_ms = 3000)" || bad "slow h2 headers: $R"
+alive || bad "process died during slow client tests"
+
+# 12c. The Host used for routing is the Host the backend gets
+DUP=$(printf 'GET / HTTP/1.1\r\nHost: only-b2.test\r\nHost: lb.test\r\nConnection: close\r\n\r\n' | timeout 5 nc 127.0.0.1 20080 | head -1 | tr -d '\r')
+echo "$DUP" | grep -q " 400" && ok "duplicate Host header rejected ($DUP)" || bad "duplicate Host: $DUP"
+ABS=$(printf 'GET http://lb.test/ HTTP/1.1\r\nHost: only-b2.test\r\nConnection: close\r\n\r\n' | timeout 5 nc 127.0.0.1 20080 | tr -d '\r')
+ABS_LINE=$(echo "$ABS" | head -1); ABS_BODY=$(echo "$ABS" | tail -1)
+if echo "$ABS_LINE" | grep -q " 400"; then ok "absolute-form URI with a different Host rejected ($ABS_LINE)"
+else echo "$ABS_BODY" | python3 -c 'import sys,json; d=json.load(sys.stdin); sys.exit(0 if d["_backend"]=="b2" and d["_all_host"]==["only-b2.test"] else 1)' \
+  && ok "absolute-form URI: routed on Host only-b2.test and backend got exactly that Host" || bad "absolute-form: $ABS_LINE $ABS_BODY"; fi
+H2PY=${SMOKE_H2_PYTHON:-python3}
+if "$H2PY" -c "import h2" 2>/dev/null; then
+  R=$("$H2PY" - <<'EOF'
+import socket, ssl, json, h2.config, h2.connection, h2.events
+ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+ctx.set_alpn_protocols(["h2"])
+s = ctx.wrap_socket(socket.create_connection(("127.0.0.1", 20443), timeout=5), server_hostname="lb.test")
+c = h2.connection.H2Connection(config=h2.config.H2Configuration(client_side=True, validate_outbound_headers=False, normalize_outbound_headers=False)); c.initiate_connection(); s.sendall(c.data_to_send())
+c.send_headers(1, [(":method", "GET"), (":scheme", "https"), (":authority", "only-b2.test"), (":path", "/"), ("host", "lb.test")], end_stream=True)
+s.sendall(c.data_to_send()); body = b""; status = None; done = False
+while not done:
+    data = s.recv(65535)
+    if not data: break
+    for ev in c.receive_data(data):
+        if isinstance(ev, h2.events.ResponseReceived): status = dict(ev.headers).get(b":status")
+        if isinstance(ev, h2.events.DataReceived): body += ev.data; c.acknowledge_received_data(len(ev.data), ev.stream_id)
+        if isinstance(ev, (h2.events.StreamEnded, h2.events.StreamReset)): done = True
+    s.sendall(c.data_to_send())
+d = json.loads(body) if status == b"200" else {}
+print(status, d.get("_backend"), d.get("_all_host"))
+EOF
+)
+  echo "$R" | grep -q "b'200' b2 \['only-b2.test'\]" && ok "h2 :authority only-b2.test + Host lb.test: routed and forwarded as only-b2.test" \
+    || { echo "$R" | grep -q "b'400'" && ok "h2 :authority/Host mismatch rejected ($R)"; } || bad "h2 authority vs host: $R"
+else
+  echo "SKIP  h2 :authority vs Host (python h2 module missing, set SMOKE_H2_PYTHON)"
+fi
 
 # 13. Rate limit is per IP: new connection (new source port) per request
 CODES=""; for i in $(seq 65); do CODES="$CODES $($C http://127.0.0.1:20080/)"; done

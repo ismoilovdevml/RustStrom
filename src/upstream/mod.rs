@@ -63,6 +63,14 @@ pub struct HealthState {
     ok_streak: AtomicU32,
     fail_streak: AtomicU32,
     last_response_ms: AtomicU64,
+    down_since_ms: AtomicU64,
+}
+
+/// Milliseconds since the first call (process-local monotonic clock).
+fn monotonic_ms() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let start = START.get_or_init(std::time::Instant::now);
+    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 impl HealthState {
@@ -70,8 +78,39 @@ impl HealthState {
         Health::from_u8(self.status.load(Ordering::Acquire))
     }
 
+    #[cfg(test)]
     fn set(&self, health: Health) {
         self.status.store(health.as_u8(), Ordering::Release);
+        if health == Health::Down {
+            self.down_since_ms.store(monotonic_ms(), Ordering::Relaxed);
+        }
+    }
+
+    /// Changes `from` to `to` atomically; false if another caller changed the state first, so
+    /// exactly one caller rebuilds the snapshot for a transition.
+    fn transition(&self, from: Health, to: Health) -> bool {
+        let swapped = self
+            .status
+            .compare_exchange(
+                from.as_u8(),
+                to.as_u8(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok();
+        if swapped && to == Health::Down {
+            self.down_since_ms.store(monotonic_ms(), Ordering::Relaxed);
+        }
+        swapped
+    }
+
+    /// How long the backend has been down (zero if it is not down).
+    pub fn down_for(&self) -> std::time::Duration {
+        if self.get() != Health::Down {
+            return std::time::Duration::ZERO;
+        }
+        let since = self.down_since_ms.load(Ordering::Relaxed);
+        std::time::Duration::from_millis(monotonic_ms().saturating_sub(since))
     }
 
     fn copy_from(&self, other: &HealthState) {
@@ -83,6 +122,10 @@ impl HealthState {
             .store(other.fail_streak.load(Ordering::Relaxed), Ordering::Relaxed);
         self.last_response_ms.store(
             other.last_response_ms.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        self.down_since_ms.store(
+            other.down_since_ms.load(Ordering::Relaxed),
             Ordering::Relaxed,
         );
     }
@@ -146,9 +189,21 @@ impl Backend {
         }
     }
 
+    /// Unconditional state change, for tests; the data plane uses `transition_health`.
+    #[cfg(test)]
     pub fn set_health(&self, health: Health) {
         self.health.set(health);
         self.health_gauge.set(health.gauge_value());
+    }
+
+    /// Atomic `from` -> `to` transition, see [`HealthState`]. True for exactly one caller.
+    pub fn transition_health(&self, from: Health, to: Health) -> bool {
+        if self.health.transition(from, to) {
+            self.health_gauge.set(to.gauge_value());
+            true
+        } else {
+            false
+        }
     }
 }
 

@@ -18,6 +18,7 @@ mod upstream;
 use clap::{Arg, ArgAction, Command};
 use log::info;
 use pingora_core::{
+    apps::HttpServerOptions,
     server::{configuration::Opt, configuration::ServerConf, Server},
     services::{background::background_service, listening::Service},
 };
@@ -88,6 +89,7 @@ fn run() -> Result<(), String> {
     let https_address = https_socket.to_string();
     let metrics_address = config.metrics_address.to_string();
     let process = config.process.clone();
+    let h2_idle_timeout = config.client.h2_idle_timeout;
     let state = Arc::new(state::State::new(
         config,
         metrics,
@@ -115,12 +117,18 @@ fn run() -> Result<(), String> {
     let mut server = Server::new_with_opt_and_conf(opt, server_conf);
     server.bootstrap();
 
-    let http_proxy =
+    let mut http_proxy =
         pingora_proxy::http_proxy(&server.configuration, proxy::Proxy::new(state.clone()));
+    // An HTTP/2 connection without an open stream is closed after h2_idle_timeout_ms; this also
+    // ends clients that never complete a HEADERS frame.
+    let mut server_options = HttpServerOptions::default();
+    server_options.h2_idle_timeout = Some(h2_idle_timeout);
+    http_proxy.server_options = Some(server_options);
     let frontend = frontend::Frontend::new(
         http_proxy,
         https_socket,
         tls::SniResolver::new(state.clone()),
+        state.clone(),
     )?;
     let mut proxy = Service::new("RustStrom proxy".to_string(), frontend);
     // Both listeners are plain TCP for Pingora; TLS is terminated in the frontend

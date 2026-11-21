@@ -2,7 +2,8 @@
 
 use crate::{
     acme::CHALLENGE_PATH_PREFIX,
-    middleware::{compression, https_redirector, RequestStep},
+    config::BODY_MIN_RATE_GRACE,
+    middleware::{authentication::AuthOutcome, compression, https_redirector, RequestStep},
     state::State,
     upstream::{health, Backend, CounterGuard, Pool, Scheme},
 };
@@ -11,8 +12,8 @@ use bytes::Bytes;
 use gethostname::gethostname;
 use http::{
     header::{
-        CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, LOCATION, SET_COOKIE, TRANSFER_ENCODING,
-        VARY, WWW_AUTHENTICATE,
+        CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HOST, LOCATION, SET_COOKIE,
+        TRANSFER_ENCODING, VARY, WWW_AUTHENTICATE,
     },
     HeaderName, HeaderValue, Method,
 };
@@ -79,6 +80,7 @@ pub struct Ctx {
     sticky_cookie: Option<String>,
     body_limit: Option<u64>,
     body_received: u64,
+    body_started: Option<Instant>,
     encoding: Option<compression::Encoding>,
     replacement_body: Option<Bytes>,
     replacement_sent: bool,
@@ -305,10 +307,20 @@ impl Proxy {
                     }
                 }
                 RequestStep::Authentication(authentication) => {
-                    if !authentication.authenticate(session.req_header()).await {
-                        let challenge = (WWW_AUTHENTICATE, "Basic realm=\"RustStrom\"".to_string());
-                        self.respond(session, ctx, 401, "", Some(challenge)).await?;
-                        return Ok(true);
+                    match authentication.authenticate(session.req_header()).await {
+                        AuthOutcome::Allowed => {}
+                        AuthOutcome::Denied => {
+                            let challenge =
+                                (WWW_AUTHENTICATE, "Basic realm=\"RustStrom\"".to_string());
+                            self.respond(session, ctx, 401, "", Some(challenge)).await?;
+                            return Ok(true);
+                        }
+                        AuthOutcome::Busy => {
+                            let retry = (http::header::RETRY_AFTER, "1".to_string());
+                            self.respond(session, ctx, 503, default_body(503), Some(retry))
+                                .await?;
+                            return Ok(true);
+                        }
                     }
                 }
                 RequestStep::MaxBodySize(limit) => {
@@ -366,6 +378,16 @@ fn status_for_error(error: &Error) -> u16 {
     }
 }
 
+/// Whether a request body that delivered `received` bytes in `elapsed` is below `min_rate`
+/// bytes/s once the grace period is over. `min_rate = 0` disables the check.
+fn body_too_slow(received: u64, elapsed: Duration, min_rate: u64) -> bool {
+    if min_rate == 0 || elapsed < BODY_MIN_RATE_GRACE {
+        return false;
+    }
+    let required = u128::from(min_rate).saturating_mul(elapsed.as_millis()) / 1000;
+    u128::from(received) < required
+}
+
 fn default_body(status: u16) -> &'static str {
     match status {
         503 => "503 - Service Unavailable",
@@ -400,6 +422,7 @@ impl ProxyHttp for Proxy {
             sticky_cookie: None,
             body_limit: None,
             body_received: 0,
+            body_started: None,
             encoding: None,
             replacement_body: None,
             replacement_sent: false,
@@ -413,6 +436,9 @@ impl ProxyHttp for Proxy {
         if session.get_keepalive() == Some(0) {
             session.set_keepalive(Some(DOWNSTREAM_KEEPALIVE_SECS));
         }
+        // Maximum pause between two reads of the request body (HTTP/1)
+        let body_idle = self.state.config.load().client.body_idle_timeout;
+        session.set_read_timeout(Some(body_idle));
         Ok(())
     }
 
@@ -424,6 +450,14 @@ impl ProxyHttp for Proxy {
             && self.state.active_requests.load(Ordering::Relaxed) > config.max_connections
         {
             self.respond(session, ctx, 503, default_body(503), None)
+                .await?;
+            return Ok(true);
+        }
+
+        // RFC 9112 section 3.2: more than one Host is a 400. Routing and the backend must never
+        // see different hosts.
+        if session.req_header().headers.get_all(HOST).iter().count() > 1 {
+            self.respond(session, ctx, 400, "Duplicate Host header", None)
                 .await?;
             return Ok(true);
         }
@@ -500,14 +534,27 @@ impl ProxyHttp for Proxy {
         _end_of_stream: bool,
         ctx: &mut Ctx,
     ) -> Result<()> {
-        if let (Some(limit), Some(chunk)) = (ctx.body_limit, body.as_ref()) {
-            ctx.body_received = ctx.body_received.saturating_add(chunk.len() as u64);
+        let Some(chunk) = body.as_ref() else {
+            return Ok(());
+        };
+        let started = *ctx.body_started.get_or_insert_with(Instant::now);
+        ctx.body_received = ctx.body_received.saturating_add(chunk.len() as u64);
+        if let Some(limit) = ctx.body_limit {
             if ctx.body_received > limit {
                 return Err(Error::explain(
                     HTTPStatus(413),
                     "request body exceeds MaxBodySize",
                 ));
             }
+        }
+        // Slow body (trickling one byte at a time defeats an idle timeout): after a grace period
+        // the average rate must reach client_body_min_rate
+        let min_rate = self.state.config.load().client.body_min_rate;
+        if body_too_slow(ctx.body_received, started.elapsed(), min_rate) {
+            return Err(Error::explain(
+                HTTPStatus(408),
+                "request body slower than client_body_min_rate",
+            ));
         }
         Ok(())
     }
@@ -685,11 +732,9 @@ impl ProxyHttp for Proxy {
         if let (Some(backend), Some(pool)) = (&ctx.backend, &ctx.pool) {
             backend.failures.inc();
             // Passive health: a refused or timed out connect counts like a failed check, so a
-            // dead backend leaves the rotation before the next active check. Without active
-            // checks (check_every = 0) nothing would bring it back, so it is not done then.
-            if !self.state.config.load().health_interval.is_zero() {
-                health::passive_failure(pool, backend, &e.to_string());
-            }
+            // dead backend leaves the rotation before the next active check (without active
+            // checks it is retried after health::PASSIVE_RETRY_AFTER)
+            health::passive_failure(pool, backend, &e.to_string());
         }
         // Nothing was sent yet, so any method may go to another backend
         let budget = ctx
@@ -911,6 +956,19 @@ mod tests {
         strip_response_hop_by_hop(&mut switching);
         assert_eq!(switching.headers["upgrade"], "websocket");
         assert_eq!(switching.headers["connection"], "Upgrade");
+    }
+
+    #[test]
+    fn slow_body_detection() {
+        let s = Duration::from_secs;
+        // grace period: anything goes
+        assert!(!body_too_slow(0, s(9), 500));
+        // 12 bytes in 12 s is a trickle
+        assert!(body_too_slow(12, s(12), 500));
+        // 1 MB in 20 s is fine
+        assert!(!body_too_slow(1_000_000, s(20), 500));
+        // disabled
+        assert!(!body_too_slow(0, s(3600), 0));
     }
 
     #[test]

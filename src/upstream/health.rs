@@ -30,11 +30,13 @@ pub async fn run(state: Arc<State>, mut shutdown: ShutdownWatch) {
         let config = state.config.load_full();
         let interval = config.health_interval;
         let started = Instant::now();
-        if !interval.is_zero() {
+        if interval.is_zero() {
+            revive_passively_failed(&config.pools);
+        } else {
             check_all(&config.pools).await;
         }
         let wait = if interval.is_zero() {
-            Duration::from_secs(5)
+            Duration::from_secs(1)
         } else {
             interval.saturating_sub(started.elapsed())
         };
@@ -118,7 +120,9 @@ pub fn apply(backend: &Backend, check: &HealthCheck, outcome: Outcome) -> bool {
             }
         }
     };
-    if after == before {
+    // compare-and-swap: with concurrent passive failures only one caller wins the transition
+    // (and rebuilds the snapshot)
+    if after == before || !backend.transition_health(before, after) {
         if let Err(reason) = &outcome {
             debug!("health check of {} failed: {}", backend.address, reason);
         }
@@ -132,8 +136,32 @@ pub fn apply(backend: &Backend, check: &HealthCheck, outcome: Outcome) -> bool {
         ),
         (_, health) => info!("new healthiness for {}: {:?}", backend.address, health),
     }
-    backend.set_health(after);
     true
+}
+
+/// Without active checks nothing would bring a passively failed backend back, so it gets
+/// traffic again after this long (the next failed connect takes it out again).
+pub const PASSIVE_RETRY_AFTER: Duration = Duration::from_secs(10);
+
+/// Used when active checks are disabled (`check_every = 0`).
+fn revive_passively_failed(pools: &[Arc<Pool>]) {
+    for pool in pools {
+        let mut changed = false;
+        for backend in &pool.backends {
+            if backend.health.down_for() >= PASSIVE_RETRY_AFTER
+                && backend.transition_health(Health::Down, Health::Healthy)
+            {
+                info!(
+                    "{} is retried after {:?} (active health checks are disabled)",
+                    backend.address, PASSIVE_RETRY_AFTER
+                );
+                changed = true;
+            }
+        }
+        if changed {
+            pool.rebuild_snapshot();
+        }
+    }
 }
 
 async fn probe(backend: &Backend, check: &HealthCheck, upstream: &UpstreamSettings) -> Outcome {
@@ -349,6 +377,31 @@ mod tests {
         assert!(!apply(&backend, &check, Ok(10)));
         assert!(apply(&backend, &check, Ok(10)));
         assert_eq!(backend.health.get(), Health::Healthy);
+    }
+
+    #[test]
+    fn concurrent_failures_transition_once() {
+        let backend = test_backend("127.0.0.1:1");
+        let mut check = check();
+        check.fall = 1;
+        let wins: usize = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| scope.spawn(|| apply(&backend, &check, Err("x".into())) as usize))
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).sum()
+        });
+        assert_eq!(wins, 1);
+        assert_eq!(backend.health.get(), Health::Down);
+    }
+
+    #[test]
+    fn passive_down_is_revived_without_active_checks() {
+        let backend = test_backend("127.0.0.1:1");
+        backend.set_health(Health::Down);
+        assert!(backend.health.down_for() < PASSIVE_RETRY_AFTER);
+        assert!(backend.transition_health(Health::Down, Health::Healthy));
+        assert!(!backend.transition_health(Health::Down, Health::Healthy));
+        assert_eq!(backend.health.down_for(), Duration::ZERO);
     }
 
     #[test]

@@ -46,7 +46,11 @@ pub fn reload(state: &State) {
     match super::load(&state.config_path, &state.metrics, Some(&old_config)) {
         Ok(new_config) => {
             warn_about_ineffectual_config_changes(&old_config, &new_config);
+            let removed = removed_backends(&old_config, &new_config);
             state.config.store(Arc::new(new_config));
+            for address in removed {
+                state.metrics.remove_backend(&address);
+            }
             state.on_config_change();
             info!("Reloaded configuration");
         }
@@ -55,6 +59,25 @@ pub fn reload(state: &State) {
             warn!("Keeping old configuration")
         }
     }
+}
+
+/// Backend addresses of `old` that no configured pool of `new` uses anymore.
+fn removed_backends(old: &RuntimeConfig, new: &RuntimeConfig) -> Vec<String> {
+    let kept: std::collections::HashSet<&str> = new
+        .pools
+        .iter()
+        .flat_map(|p| p.backends.iter().map(|b| b.address.as_str()))
+        .collect();
+    let mut removed: Vec<String> = old
+        .pools
+        .iter()
+        .flat_map(|p| p.backends.iter().map(|b| b.address.as_str()))
+        .filter(|address| !kept.contains(address))
+        .map(str::to_string)
+        .collect();
+    removed.sort();
+    removed.dedup();
+    removed
 }
 
 fn warn_about_ineffectual_config_changes(old: &RuntimeConfig, new: &RuntimeConfig) {
@@ -79,6 +102,10 @@ fn warn_about_ineffectual_config_changes(old: &RuntimeConfig, new: &RuntimeConfi
             old.process.upgrade_sock != new.process.upgrade_sock,
         ),
         ("pid_file", old.process.pid_file != new.process.pid_file),
+        (
+            "h2_idle_timeout_ms",
+            old.client.h2_idle_timeout != new.client.h2_idle_timeout,
+        ),
     ];
     for (name, changed) in restart_only {
         if changed {

@@ -58,6 +58,13 @@ impl TryFrom<&str> for Matcher {
 /// The request host: the `Host` header for HTTP/1.1, the `:authority` pseudo header (exposed as
 /// the URI authority) for HTTP/2. Compared verbatim, like v1.1 (a port is part of the value).
 pub fn request_host(request: &RequestHeader) -> Option<&str> {
+    // HTTP/2: `:authority` wins over a Host header (RFC 9113 section 8.3.1), and it is what
+    // Pingora sends upstream as Host, so routing must use it too.
+    if request.version == http::Version::HTTP_2 {
+        if let Some(authority) = request.uri.authority() {
+            return Some(authority.as_str());
+        }
+    }
     match request.headers.get(HOST) {
         Some(host) => host.to_str().ok(),
         None => request.uri.authority().map(|it| it.as_str()),
@@ -282,6 +289,17 @@ mod tests {
         let mut req = request("GET", "/x", None);
         req.set_uri("https://google.de/x".parse().unwrap());
         assert!(Matcher::Host("google.de".into()).matches(&req));
+    }
+
+    #[test]
+    fn http2_authority_wins_over_host_header() {
+        let mut req = request("GET", "/x", Some("evil.test"));
+        req.set_uri("https://good.test/x".parse().unwrap());
+        req.set_version(http::Version::HTTP_2);
+        assert_eq!(request_host(&req), Some("good.test"));
+        // HTTP/1.1 keeps v1.1 semantics: the Host header
+        req.set_version(http::Version::HTTP_11);
+        assert_eq!(request_host(&req), Some("evil.test"));
     }
 
     #[test]

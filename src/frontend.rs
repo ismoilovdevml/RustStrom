@@ -12,7 +12,7 @@
 //!
 //! HTTP/2 connections are passed to Pingora unchanged.
 
-use crate::{proxy::Proxy, tls::SniResolver};
+use crate::{proxy::Proxy, state::State, tls::SniResolver};
 use async_trait::async_trait;
 use bytes::BytesMut;
 use log::{debug, warn};
@@ -34,8 +34,6 @@ use tokio::{
     time::{timeout, timeout_at, Instant},
 };
 
-/// Maximum time between the first byte of a request head and its end (v1.1: 30 s).
-pub const HEADER_TIMEOUT: Duration = Duration::from_secs(30);
 /// Maximum time for a TLS handshake (v1.1: 10 s).
 pub const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long an idle keep-alive connection waits for the next request (Pingora's default).
@@ -50,6 +48,7 @@ pub struct Frontend {
     https_address: SocketAddr,
     tls: SslAcceptor,
     resolver: SniResolver,
+    state: Arc<State>,
 }
 
 enum Head {
@@ -63,6 +62,7 @@ impl Frontend {
         proxy: HttpProxy<Proxy>,
         https_address: SocketAddr,
         resolver: SniResolver,
+        state: Arc<State>,
     ) -> Result<Frontend, String> {
         let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())
             .map_err(|e| format!("Could not create TLS acceptor: {}", e))?;
@@ -75,6 +75,7 @@ impl Frontend {
             https_address,
             tls: builder.build(),
             resolver,
+            state,
         })
     }
 
@@ -96,7 +97,12 @@ impl Frontend {
 }
 
 /// Reads one request head (up to and including the empty line) with a total deadline.
-async fn read_head(stream: &mut Stream, first: bool, shutdown: &ShutdownWatch) -> Head {
+async fn read_head(
+    stream: &mut Stream,
+    first: bool,
+    header_timeout: Duration,
+    shutdown: &ShutdownWatch,
+) -> Head {
     let mut buf = BytesMut::with_capacity(4096);
     let mut shutdown = shutdown.clone();
     // Idle keep-alive connections wait for the first byte of the next request
@@ -113,7 +119,7 @@ async fn read_head(stream: &mut Stream, first: bool, shutdown: &ShutdownWatch) -
             _ = shutdown.changed() => return Head::Closed,
         }
     }
-    let deadline = Instant::now() + HEADER_TIMEOUT;
+    let deadline = Instant::now() + header_timeout;
     let mut scanned = 0;
     loop {
         if let Some(end) = head_end(&buf, scanned) {
@@ -189,11 +195,12 @@ impl ServerApp for Frontend {
         let mut first = true;
         let mut settings = None;
         loop {
-            let head = match read_head(&mut stream, first, shutdown).await {
+            let header_timeout = self.state.config.load().client.header_timeout;
+            let head = match read_head(&mut stream, first, header_timeout, shutdown).await {
                 Head::Complete(head) => head,
                 Head::Closed => return None,
                 Head::TimedOut => {
-                    debug!("request head not complete within {:?}", HEADER_TIMEOUT);
+                    debug!("request head not complete within {:?}", header_timeout);
                     let _ = stream
                         .write_all(
                             b"HTTP/1.1 408 Request Timeout\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
