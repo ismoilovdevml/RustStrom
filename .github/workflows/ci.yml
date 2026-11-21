@@ -84,13 +84,13 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build (Debug)
-        run: cargo build --verbose
+        run: cargo build --locked --verbose
 
       - name: Run tests
         run: cargo test --verbose
 
       - name: Build (Release)
-        run: cargo build --release --verbose
+        run: cargo build --locked --release --verbose
 
       - name: Check binary size
         run: |

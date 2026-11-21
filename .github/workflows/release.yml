@@ -82,7 +82,7 @@ jobs:
           cache-on-failure: true
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --locked --release --target ${{ matrix.target }}
 
       - name: Verify binary
         run: |
