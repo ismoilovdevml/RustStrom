@@ -14,9 +14,6 @@ WORKDIR /app
 # Build dependencies first with a stub main.rs so this layer is cached
 # until Cargo.toml / Cargo.lock change.
 COPY Cargo.toml Cargo.lock ./
-# Workspace member (ACME client) and the patched libz-ng-sys (no cmake needed)
-COPY crates ./crates
-COPY vendor ./vendor
 RUN mkdir src \
     && echo "fn main() {}" > src/main.rs \
     && cargo build --release --locked \

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # RustStrom - HTTP/HTTPS Load Balancer Installer
-# Supports: Linux (Ubuntu, Debian, CentOS, Fedora, Arch). macOS is not supported since 2.0.
+# Supports: Linux (Ubuntu, Debian, CentOS, Fedora, Arch) and macOS
 # Usage: curl -sSL https://raw.githubusercontent.com/ismoilovdevml/RustStrom/main/install.sh | sudo bash
 
 set -e
@@ -74,9 +74,8 @@ detect_os() {
             DISTRO=$ID
         fi
     elif [[ "$OSTYPE" == "darwin"* ]]; then
-        # v2 (Pingora data plane) is built and tested on Linux only
-        print_error "macOS is not supported since RustStrom 2.0. Use a Linux host or the Docker image."
-        exit 1
+        OS="macos"
+        DISTRO="macos"
     else
         print_error "Unsupported operating system: $OSTYPE"
         exit 1
