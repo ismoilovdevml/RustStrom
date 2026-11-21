@@ -1,0 +1,28 @@
+# Static backend: fixed-size bodies from the page cache, no logging, long keep-alive.
+worker_processes @WORKERS@;
+worker_rlimit_nofile 200000;
+error_log /dev/stderr warn;
+pid /tmp/nginx.pid;
+
+events {
+    worker_connections 50000;
+    multi_accept on;
+}
+
+http {
+    access_log off;
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 300s;
+    keepalive_requests 10000000;
+    default_type application/octet-stream;
+    etag off;
+
+    server {
+        listen 127.0.0.1:@PORT@ reuseport backlog=65535;
+        root /www;
+        location = /health { return 200 "ok\n"; }
+        # /1k, /100k, /10m are files in /www
+    }
+}

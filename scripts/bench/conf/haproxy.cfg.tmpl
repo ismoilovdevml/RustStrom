@@ -1,0 +1,45 @@
+# HAProxy config equivalent to conf/ruststrom.toml.tmpl. run.sh fills the at-sign placeholders.
+global
+    nbthread @LB_THREADS@
+    # One thread per LB core (taskset/cpuset already restricts the process to @LB_CPUS@).
+    cpu-map auto:1/1-@LB_THREADS@ @LB_CPUS@
+    maxconn 200000
+    # Master socket for seamless reloads (listening sockets are passed to the new worker).
+    stats socket /tmp/haproxy.sock mode 600 level admin expose-fd listeners
+    # Read-only CLI on loopback, used by the harness to read counters ("show info").
+    stats socket ipv4@127.0.0.1:@PORT_HAPROXY_CLI@ level user
+    hard-stop-after 30s
+    # TLS: library defaults (TLS 1.2 and 1.3), same certificate as RustStrom.
+    ssl-default-bind-options ssl-min-ver TLSv1.2
+
+defaults
+    mode http
+    # No access log: RustStrom v1 does not write one either.
+    timeout connect 5s
+    timeout client 60s
+    timeout server 60s
+    timeout http-keep-alive 60s
+    timeout http-request 30s
+    timeout check 500ms
+    # One retry on another backend when connecting fails (RustStrom v2 `retries = 1`).
+    retries 1
+    option redispatch 1
+    http-reuse safe
+    maxconn 200000
+
+frontend fe_http
+    bind @LISTEN_ADDR@:@PORT_HTTP@
+    bind @LISTEN_ADDR@:@PORT_HTTPS@ ssl crt @CERT_PEM@ alpn h2,http/1.1
+    default_backend be_pool
+
+backend be_pool
+    balance roundrobin
+    option httpchk GET /health
+    http-check expect status 200
+    default-server check inter @HEALTH_INTERVAL_S@s rise 2 fall 3
+@BACKEND_SERVERS@
+
+frontend stats
+    bind 127.0.0.1:@PORT_HAPROXY_STATS@
+    stats enable
+    stats uri /stats
