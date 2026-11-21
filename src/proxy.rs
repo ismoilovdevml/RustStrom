@@ -4,7 +4,7 @@ use crate::{
     acme::CHALLENGE_PATH_PREFIX,
     middleware::{compression, https_redirector, RequestStep},
     state::State,
-    upstream::{Backend, CounterGuard, Pool, Scheme},
+    upstream::{health, Backend, CounterGuard, Pool, Scheme},
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -182,6 +182,41 @@ pub fn set_forwarding_headers(
         request.remove_header(name);
     }
     Ok(())
+}
+
+/// Hop-by-hop headers of a backend response (RFC 9110 section 7.6.1) describe the backend
+/// connection, not the client one: Pingora decides keep-alive and framing downstream (it adds
+/// `Transfer-Encoding: chunked` itself when a body has no length). `101 Switching Protocols`
+/// keeps `Connection`/`Upgrade`.
+pub fn strip_response_hop_by_hop(response: &mut ResponseHeader) {
+    let upgrade = response.status.as_u16() == 101;
+    if !upgrade {
+        let listed: Vec<HeaderName> = response
+            .headers
+            .get_all(http::header::CONNECTION)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .filter_map(|name| HeaderName::from_bytes(name.trim().as_bytes()).ok())
+            .collect();
+        for name in &listed {
+            // Never let a backend remove the framing of its own response this way
+            if name != CONTENT_LENGTH {
+                response.remove_header(name);
+            }
+        }
+        response.remove_header(&http::header::CONNECTION);
+        response.remove_header(&http::header::UPGRADE);
+    }
+    for name in [
+        "keep-alive",
+        "proxy-connection",
+        "te",
+        "trailer",
+        "transfer-encoding",
+    ] {
+        response.remove_header(name);
+    }
 }
 
 impl Proxy {
@@ -552,6 +587,7 @@ impl ProxyHttp for Proxy {
         if let (Some(backend), Some(start)) = (&ctx.backend, ctx.upstream_start.take()) {
             backend.response_time.observe(start.elapsed().as_secs_f64());
         }
+        strip_response_hop_by_hop(upstream_response);
         Ok(())
     }
 
@@ -646,8 +682,14 @@ impl ProxyHttp for Proxy {
         ctx: &mut Ctx,
         mut e: Box<Error>,
     ) -> Box<Error> {
-        if let Some(backend) = &ctx.backend {
+        if let (Some(backend), Some(pool)) = (&ctx.backend, &ctx.pool) {
             backend.failures.inc();
+            // Passive health: a refused or timed out connect counts like a failed check, so a
+            // dead backend leaves the rotation before the next active check. Without active
+            // checks (check_every = 0) nothing would bring it back, so it is not done then.
+            if !self.state.config.load().health_interval.is_zero() {
+                health::passive_failure(pool, backend, &e.to_string());
+            }
         }
         // Nothing was sent yet, so any method may go to another backend
         let budget = ctx
@@ -836,6 +878,39 @@ mod tests {
             assert!(!req.headers.contains_key(name), "{} was forwarded", name);
         }
         assert!(req.headers.contains_key("x-kept"));
+    }
+
+    #[test]
+    fn response_hop_by_hop_headers_are_removed() {
+        let mut response = ResponseHeader::build(200, None).unwrap();
+        for (name, value) in [
+            ("connection", "keep-alive, x-internal"),
+            ("keep-alive", "timeout=5"),
+            ("x-internal", "1"),
+            ("transfer-encoding", "chunked"),
+            ("upgrade", "h2c"),
+            ("x-kept", "1"),
+        ] {
+            response.insert_header(name.to_string(), value).unwrap();
+        }
+        strip_response_hop_by_hop(&mut response);
+        for name in [
+            "connection",
+            "keep-alive",
+            "x-internal",
+            "transfer-encoding",
+            "upgrade",
+        ] {
+            assert!(!response.headers.contains_key(name), "{} kept", name);
+        }
+        assert!(response.headers.contains_key("x-kept"));
+
+        let mut switching = ResponseHeader::build(101, None).unwrap();
+        switching.insert_header("connection", "Upgrade").unwrap();
+        switching.insert_header("upgrade", "websocket").unwrap();
+        strip_response_hop_by_hop(&mut switching);
+        assert_eq!(switching.headers["upgrade"], "websocket");
+        assert_eq!(switching.headers["connection"], "Upgrade");
     }
 
     #[test]

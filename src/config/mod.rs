@@ -613,12 +613,15 @@ fn default_path() -> String {
     "/".to_string()
 }
 
+/// Without `rise`/`fall` a single check changes the state, exactly like v1.1, so existing
+/// configurations keep their failover timing. `rise = 2, fall = 3` (HAProxy's defaults) is
+/// the recommended setting against flapping.
 fn default_rise() -> u32 {
-    2
+    1
 }
 
 fn default_fall() -> u32 {
-    3
+    1
 }
 
 fn default_kind() -> HealthKind {

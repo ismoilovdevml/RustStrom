@@ -78,6 +78,18 @@ pub async fn check_all(pools: &[Arc<Pool>]) {
     }
 }
 
+/// A failed connect seen by the data plane counts like a failed check (passive health). Only
+/// failures are observed passively; recovery (`rise`) needs active checks.
+pub fn passive_failure(pool: &Pool, backend: &Backend, reason: &str) {
+    if apply(
+        backend,
+        &pool.health_check,
+        Err(format!("passive: {}", reason)),
+    ) {
+        pool.rebuild_snapshot();
+    }
+}
+
 /// Feeds one probe result into the backend state machine. Returns whether the state changed.
 pub fn apply(backend: &Backend, check: &HealthCheck, outcome: Outcome) -> bool {
     use std::sync::atomic::Ordering::Relaxed;

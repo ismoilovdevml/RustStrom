@@ -67,6 +67,8 @@ https_address = "127.0.0.1:20443"
 prometheus_metrics_address = "127.0.0.1:20090"
 threads = 4
 grace_period_secs = 10
+upgrade_sock = "$D/upgrade.sock"
+pid_file = "$D/ruststrom.pid"
 [health_interval]
 check_every = 1
 
@@ -270,7 +272,19 @@ write_config new.toml "Host('other.test')"; mv new.toml config.toml; sleep 3
 CODE=$($C -H 'Host: unknown.test' http://127.0.0.1:20080/)
 [ "$CODE" = 404 ] && grep -q "Reloaded configuration" lb.log && ok "atomic mv reload picked up (now 404 for unmatched host)" || bad "atomic reload, code $CODE"
 
-# 16. Graceful SIGTERM: an in-flight request finishes, then the process exits quickly
+# 16. Graceful upgrade: a new process takes over the listening sockets (SIGQUIT to the old one)
+LOG_LEVEL=info "$BIN" --config config.toml --upgrade >lb2.log 2>&1 & LB2=$!
+sleep 1
+kill -QUIT $LB
+UP=""; for i in $(seq 40); do UP="$UP $($C -H 'Host: other.test' http://127.0.0.1:20080/)"; sleep 0.2; done
+for i in $(seq 100); do alive || break; sleep 0.1; done
+OLD_GONE=$(alive && echo no || echo yes)
+NON200=$(echo $UP | tr ' ' '\n' | grep -vc '^200$')
+[ "$OLD_GONE" = yes ] && kill -0 $LB2 2>/dev/null && [ "$NON200" = 0 ] && grep -q "listener sockets sent" lb.log \
+  && ok "graceful upgrade: 40/40 requests 200 while the old process handed over and exited" || bad "upgrade: old gone=$OLD_GONE non-200=$NON200 codes:$UP"
+LB=$LB2; cp lb2.log lb.log.2
+
+# 17. Graceful SIGTERM: an in-flight request finishes, then the process exits quickly
 curl -s -o inflight.out -w '%{http_code}' --max-time 10 -H 'Host: other.test' http://127.0.0.1:20080/slow > inflight.code & CURL=$!
 sleep 0.5
 kill -TERM $LB; T0=$(date +%s.%N)
