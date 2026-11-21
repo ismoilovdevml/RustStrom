@@ -53,7 +53,7 @@ jobs:
     name: Build & Test
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]  # Linux is the supported platform; macOS builds are not maintained for v2
         rust: [stable]
     runs-on: ${{ matrix.os }}
     steps:
@@ -84,13 +84,13 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build (Debug)
-        run: cargo build --verbose
+        run: cargo build --locked --verbose
 
       - name: Run tests
         run: cargo test --verbose
 
       - name: Build (Release)
-        run: cargo build --release --verbose
+        run: cargo build --locked --release --verbose
 
       - name: Check binary size
         run: |

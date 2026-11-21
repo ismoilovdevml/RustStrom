@@ -1,0 +1,14 @@
+diff --git a/src/ssl.c b/src/ssl.c
+--- a/src/ssl.c
++++ b/src/ssl.c
+@@ -42,6 +42,10 @@ status ssl_connect(connection *c, char *host) {
+ status ssl_close(connection *c) {
+     SSL_shutdown(c->ssl);
+     SSL_clear(c->ssl);
++    // wrk reuses the SSL object for the next connection and SSL_clear keeps the session, so
++    // every reconnect would be a resumed (PSK) handshake. The benchmark measures full
++    // handshakes: drop the session.
++    SSL_set_session(c->ssl, NULL);
+     return OK;
+ }
+

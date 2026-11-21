@@ -1,0 +1,31 @@
+# RustStrom config equivalent to conf/haproxy.cfg.tmpl. run.sh fills the at-sign placeholders.
+# Keys marked "v2" are new optional keys from docs/v2/DESIGN.md; v1.1 ignores unknown keys.
+http_address = "@LISTEN_ADDR@:@PORT_HTTP@"
+https_address = "@LISTEN_ADDR@:@PORT_HTTPS@"
+prometheus_metrics_address = "127.0.0.1:@PORT_RS_METRICS@"
+threads = @LB_THREADS@  # v2; v1.1 is limited through TOKIO_WORKER_THREADS by run.sh
+
+[health_interval]
+check_every = @HEALTH_INTERVAL_S@
+
+[[backend_pools]]
+matcher = "PathRegexp('^/')"
+addresses = [@BACKEND_ADDRESSES@]
+schemes = ["HTTP", "HTTPS"]
+strategy = { RoundRobin = {} }
+
+[backend_pools.health_config]
+slow_threshold = 300
+timeout = 500
+path = "/health"
+rise = 2   # v2
+fall = 3   # v2
+
+[backend_pools.upstream]
+retries = 1  # v2: one extra attempt on another backend, like HAProxy `retries 1` + redispatch
+
+[certificates."localhost"]
+type = "Local"
+certificate_path = "@CERT_CRT@"
+private_key_path = "@CERT_KEY@"
+# reload-generation: @GENERATION@
