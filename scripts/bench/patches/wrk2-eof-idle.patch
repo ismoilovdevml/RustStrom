@@ -1,0 +1,42 @@
+diff --git a/src/wrk.c b/src/wrk.c
+index 1049f0b..6af5340 100644
+--- a/src/wrk.c
++++ b/src/wrk.c
+@@ -329,6 +329,10 @@ static int connect_socket(thread *thread, connection *c) {
+ 
+ static int reconnect_socket(thread *thread, connection *c) {
+     aeDeleteFileEvent(thread->loop, c->fd, AE_WRITABLE | AE_READABLE);
++    // A request in flight on the old connection is lost; start the next one from scratch.
++    c->written = 0;
++    c->pending = 0;
++    c->has_pending = false;
+     sock.close(c);
+     close(c->fd);
+     return connect_socket(thread, c);
+@@ -376,7 +380,9 @@ static int check_timeouts(aeEventLoop *loop, long long id, void *data) {
+     uint64_t maxAge = now - (cfg.timeout * 1000);
+ 
+     for (uint64_t i = 0; i < thread->connections; i++, c++) {
+-        if (maxAge > c->start) {
++        // Only a request that is in flight can time out; an idle keep-alive connection
++        // waiting for its next scheduled send is not a timeout.
++        if (c->has_pending && maxAge > c->start) {
+             thread->errors.timeout++;
+         }
+     }
+@@ -661,6 +667,15 @@ static void socket_readable(aeEventLoop *loop, int fd, void *data, int mask) {
+             case RETRY: return;
+         }
+ 
++        if (n == 0) {
++            // EOF. Upstream wrk2 ignores it and the connection silently stops sending
++            // (e.g. after HAProxy closes idle keep-alive connections on reload). It is an
++            // error only if a request was in flight; otherwise just reconnect.
++            if (c->has_pending) goto error;
++            reconnect_socket(c->thread, c);
++            return;
++        }
++
+         if (http_parser_execute(&c->parser, &parser_settings, c->buf, n) != n) goto error;
+         c->thread->bytes += n;
+     } while (n == RECVBUF && sock.readable(c) > 0);
