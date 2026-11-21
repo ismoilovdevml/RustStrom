@@ -3,6 +3,7 @@
 
 mod acme;
 mod config;
+mod frontend;
 mod logging;
 mod matcher;
 mod metrics;
@@ -17,7 +18,6 @@ mod upstream;
 use clap::{Arg, ArgAction, Command};
 use log::info;
 use pingora_core::{
-    listeners::tls::TlsSettings,
     server::{configuration::Opt, configuration::ServerConf, Server},
     services::{background::background_service, listening::Service},
 };
@@ -84,7 +84,8 @@ fn run() -> Result<(), String> {
     }
 
     let http_address = config.http_address.to_string();
-    let https_address = config.https_address.to_string();
+    let https_socket = config.https_address;
+    let https_address = https_socket.to_string();
     let metrics_address = config.metrics_address.to_string();
     let process = config.process.clone();
     let state = Arc::new(state::State::new(
@@ -114,17 +115,17 @@ fn run() -> Result<(), String> {
     let mut server = Server::new_with_opt_and_conf(opt, server_conf);
     server.bootstrap();
 
-    let mut proxy = pingora_proxy::http_proxy_service_with_name(
-        &server.configuration,
-        proxy::Proxy::new(state.clone()),
-        "RustStrom proxy",
-    );
+    let http_proxy =
+        pingora_proxy::http_proxy(&server.configuration, proxy::Proxy::new(state.clone()));
+    let frontend = frontend::Frontend::new(
+        http_proxy,
+        https_socket,
+        tls::SniResolver::new(state.clone()),
+    )?;
+    let mut proxy = Service::new("RustStrom proxy".to_string(), frontend);
+    // Both listeners are plain TCP for Pingora; TLS is terminated in the frontend
     proxy.add_tcp(&http_address);
-    let mut tls_settings =
-        TlsSettings::with_callbacks(Box::new(tls::SniResolver::new(state.clone())))
-            .map_err(|e| format!("Could not create TLS settings: {}", e))?;
-    tls_settings.enable_h2();
-    proxy.add_tls_with_settings(&https_address, None, tls_settings);
+    proxy.add_tcp(&https_address);
     info!(
         "Listening on http://{} and https://{} with {} worker threads",
         http_address, https_address, process.threads

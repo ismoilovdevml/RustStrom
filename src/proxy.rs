@@ -144,6 +144,7 @@ pub fn set_forwarding_headers(
     request: &mut RequestHeader,
     client_ip: Option<IpAddr>,
     scheme: Scheme,
+    local_port: Option<u16>,
 ) -> Result<()> {
     if let Some(ip) = client_ip {
         let ip = ip.to_string();
@@ -153,11 +154,13 @@ pub fn set_forwarding_headers(
     } else {
         request.remove_header(&X_REAL_IP);
     }
-    let (port, proto) = match scheme {
-        Scheme::Http => ("80", "http"),
-        Scheme::Https => ("443", "https"),
+    let (default_port, proto) = match scheme {
+        Scheme::Http => (80, "http"),
+        Scheme::Https => (443, "https"),
     };
-    request.insert_header(X_FORWARDED_PORT.clone(), port)?;
+    // The port the client connected to (v1.1 always sent 80/443)
+    let port = local_port.unwrap_or(default_port);
+    request.insert_header(X_FORWARDED_PORT.clone(), port.to_string())?;
     request.insert_header(X_FORWARDED_PROTO.clone(), proto)?;
     match forwarded_server_header() {
         Some(hostname) => request.insert_header(X_FORWARDED_SERVER.clone(), hostname.clone())?,
@@ -443,8 +446,12 @@ impl ProxyHttp for Proxy {
         }
 
         if pool.snapshot().backends.is_empty() {
-            // No healthy (or slow) backend: middlewares ran, but there is nobody to ask
-            self.respond(session, ctx, 503, default_body(503), None)
+            // No healthy (or slow) backend: 502 like v1.1, and every backend of the pool counts
+            // the failed request (v1.1 counted nothing here)
+            for backend in &pool.backends {
+                backend.failures.inc();
+            }
+            self.respond(session, ctx, 502, default_body(502), None)
                 .await?;
             return Ok(true);
         }
@@ -489,7 +496,7 @@ impl ProxyHttp for Proxy {
             )
         };
         let Some(selection) = selection else {
-            return Err(Error::explain(HTTPStatus(503), "no healthy backend"));
+            return Err(Error::explain(HTTPStatus(502), "no healthy backend"));
         };
         let backend = selection.backend;
         ctx.sticky_cookie = match (selection.set_sticky_cookie, pool.strategy.sticky()) {
@@ -526,7 +533,11 @@ impl ProxyHttp for Proxy {
         upstream_request: &mut RequestHeader,
         ctx: &mut Ctx,
     ) -> Result<()> {
-        set_forwarding_headers(upstream_request, client_ip(session), ctx.scheme)
+        let local_port = session
+            .server_addr()
+            .and_then(|address| address.as_inet())
+            .map(|address| address.port());
+        set_forwarding_headers(upstream_request, client_ip(session), ctx.scheme, local_port)
     }
 
     async fn upstream_response_filter(
@@ -776,8 +787,13 @@ mod tests {
             ("x-forwarded-port", "443"),
             ("x-forwarded-for", "1.2.3.4"),
         ]);
-        set_forwarding_headers(&mut req, Some("203.0.113.7".parse().unwrap()), Scheme::Http)
-            .unwrap();
+        set_forwarding_headers(
+            &mut req,
+            Some("203.0.113.7".parse().unwrap()),
+            Scheme::Http,
+            None,
+        )
+        .unwrap();
         let headers = &req.headers;
         assert_eq!(headers.get_all("x-real-ip").iter().count(), 1);
         assert_eq!(headers["x-real-ip"], "203.0.113.7");
@@ -799,11 +815,12 @@ mod tests {
             &mut req,
             Some("::ffff:10.0.0.1".parse::<IpAddr>().unwrap().to_canonical()),
             Scheme::Https,
+            Some(8443),
         )
         .unwrap();
         assert_eq!(req.headers["x-forwarded-for"], "1.1.1.1, 2.2.2.2, 10.0.0.1");
         assert_eq!(req.headers["x-forwarded-proto"], "https");
-        assert_eq!(req.headers["x-forwarded-port"], "443");
+        assert_eq!(req.headers["x-forwarded-port"], "8443");
     }
 
     #[test]
@@ -814,7 +831,7 @@ mod tests {
             ("proxy-authorization", "Basic x"),
             ("x-kept", "1"),
         ]);
-        set_forwarding_headers(&mut req, None, Scheme::Http).unwrap();
+        set_forwarding_headers(&mut req, None, Scheme::Http, None).unwrap();
         for name in ["keep-alive", "te", "proxy-authorization", "x-real-ip"] {
             assert!(!req.headers.contains_key(name), "{} was forwarded", name);
         }

@@ -183,7 +183,7 @@ CODE=$(curl -sk -o /dev/null -w %{http_code} --max-time 5 --resolve nocert.test:
 
 # 5. Header spoofing
 H=$(curl -s --max-time 5 -H 'X-Real-IP: 6.6.6.6' -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-For: 1.2.3.4' -H 'Connection: keep-alive, X-Secret' -H 'X-Secret: 1' -H 'Proxy-Authorization: Basic eDp5' http://127.0.0.1:20080/)
-echo "$H" | grep -q '"_all_real_ip": \["127.0.0.1"\]' && echo "$H" | grep -q '"x-forwarded-proto": "http"' && echo "$H" | grep -q '"x-forwarded-for": "1.2.3.4, 127.0.0.1"' && echo "$H" | grep -q '"x-forwarded-port": "80"' && ! echo "$H" | grep -q x-secret && ! echo "$H" | grep -qi proxy-authorization \
+echo "$H" | grep -q '"_all_real_ip": \["127.0.0.1"\]' && echo "$H" | grep -q '"x-forwarded-proto": "http"' && echo "$H" | grep -q '"x-forwarded-for": "1.2.3.4, 127.0.0.1"' && echo "$H" | grep -q '"x-forwarded-port": "20080"' && ! echo "$H" | grep -q x-secret && ! echo "$H" | grep -qi proxy-authorization \
   && ok "X-Real-IP/X-Forwarded-* overwritten, XFF appended, hop-by-hop stripped" || bad "headers: $H"
 
 # 6. MaxBodySize
@@ -202,10 +202,10 @@ CODE=$($C -X POST -H 'Host: fail.test' http://127.0.0.1:20080/)
 CODE2=$($C -X POST -H 'Host: fail.test' http://127.0.0.1:20080/)
 [ "$CODE" = 200 ] && [ "$CODE2" = 200 ] && ok "POST also retried after connect failure (nothing was sent)" || bad "POST failover $CODE $CODE2"
 
-# 8. All backends down -> 503 after health checks
+# 8. All backends down -> 502 after health checks (v1.1 status)
 sleep 2.5
 CODE=$($C -H 'Host: down.test' http://127.0.0.1:20080/)
-[ "$CODE" = 503 ] && ok "pool without healthy backend -> 503" || bad "down pool code $CODE"
+[ "$CODE" = 502 ] && ok "pool without healthy backend -> 502" || bad "down pool code $CODE"
 
 # 9. Read timeout -> 504
 CODE=$($C -H 'Host: slow.test' http://127.0.0.1:20080/slow)
