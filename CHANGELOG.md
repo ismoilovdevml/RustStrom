@@ -3,6 +3,28 @@
 All notable changes to RustStrom are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.0.0] - Unreleased
+
+### Changed
+
+- Data plane rewritten on Cloudflare Pingora 0.9. Every v1.1 configuration that passes `--check` still loads; new keys are optional (see README, "v2 options").
+- HTTP/1 request heads must arrive within `client_header_timeout_ms` (30 s), request bodies may not pause longer than `client_body_idle_timeout_ms` (60 s) or average less than `client_body_min_rate` (500 B/s) after 10 s (`408`), HTTP/2 connections without open streams close after `h2_idle_timeout_ms` (60 s). TLS handshakes have 10 s.
+- Retries on another backend after a failed connect; failed connects also mark a backend down (passive health). Without active checks (`check_every = 0`) such a backend is retried after 10 s.
+- `IPHash` uses consistent hashing: clients map to different backends than in v1 once, afterwards adding or removing a backend moves only ~1/N of them.
+- `LeastConnection` picks the less loaded of two random backends by in-flight requests.
+- Chunked and HTTP/2 bodies over `MaxBodySize` get `413` (v1: `502`).
+- WebSocket and other upgrades are proxied; upstream TLS and HTTP/2 are available.
+- Compression negotiates `br` and `gzip` only (no `deflate`).
+- Requests with more than one `Host` header, absolute-form targets that disagree with `Host`, and HTTP/2 requests whose `Host` disagrees with `:authority` are rejected with `400`.
+
+### Security
+
+- `X-Forwarded-For` keeps append semantics: backends must use `X-Real-IP` or the last entry. The client IP is always the socket peer (no trusted-proxy mode yet).
+- LDAP authentication: successful logins are cached for 30 s and failed ones for 5 s, keyed by a salted SHA-256. At most 32 LDAP exchanges run at once (`max_concurrent`); further requests get `503` instead of queueing LDAP connections.
+- Hop-by-hop headers are also removed from backend responses.
+- The rate limiter evicts the oldest clients when more than 100 000 IPs are tracked; a distributed flood can exceed the per-IP limit.
+- Builds use a vendored, portable zlib-ng; never set `ZLIB_NG_SIMD` for binaries that run elsewhere.
+
 ## [1.1.1] - 2026-11-20
 
 ### Fixed

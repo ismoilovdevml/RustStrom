@@ -49,8 +49,26 @@ RateLimiter (per IP fixed window, 64 lock shards, at most 100k tracked clients),
 (413 for declared and streamed bodies), Compression (Pingora module driven by the v1.1 rules:
 q-values, br 4 / gzip 5, skip < 1 KiB, binary and SSE, `Vary`), HttpsRedirector (301),
 CustomErrorPages (cached at load, for backend and proxy generated errors), Authentication (LDAP,
-`ldap_escape`, empty password rejected, 5 s timeout, 30 s success cache keyed by a seeded hash of
-user and password). Request-phase middlewares run in TOML order.
+`ldap_escape`, empty password rejected, 5 s timeout, 30 s success / 5 s failure cache keyed by a
+salted SHA-256 of user and password, at most `max_concurrent` (32) LDAP exchanges, 503 above).
+Request-phase middlewares run in TOML order.
+
+## Review fixes (before 2.0.0)
+
+- Slow clients: `client_header_timeout_ms` (30 s head), `client_body_idle_timeout_ms` (60 s
+  pause, 408), `client_body_min_rate` (500 B/s after 10 s, 408), `h2_idle_timeout_ms` (60 s
+  without an open stream; also ends a never-completed HEADERS frame). Smoke tests: body never
+  sent (408 after 2.0 s), body trickled 1 B/s (408 after 10.0 s), h2 HEADERS trickled 1 B/s
+  (closed after 3.0 s).
+- LDAP: negative cache, salted SHA-256 key, bounded concurrency failing fast with 503.
+- Health transitions are compare-and-swap; only one caller rebuilds snapshot and ring.
+- Reload removes the Prometheus series of backends that are gone.
+- `check_every = 0`: passive health stays on, a warning is logged, passively failed backends are
+  retried after 10 s.
+- Host handling: duplicate `Host` → 400 (own check), absolute-form target with a different
+  `Host` → 400 (Pingora), h2 `:authority` ≠ `Host` → 400 (Pingora); routing on h2 uses
+  `:authority`, the value Pingora forwards. All three are smoke tests.
+- README/CHANGELOG: XFF semantics, peer-IP only, rate limiter eviction, `ZLIB_NG_SIMD`.
 
 ## Deviations from DESIGN.md / v1.1
 
@@ -78,8 +96,8 @@ user and password). Request-phase middlewares run in TOML order.
 | Check | Result |
 |---|---|
 | `cargo fmt --all --check` | clean |
-| `cargo clippy --all-targets -- -D warnings` | clean |
-| `cargo test --workspace` | rust-strom 60 passed; ruststrom-acme 12 + 1 passed (11 Pebble tests ignored) |
-| `scripts/smoke-v2.sh` | 38 passed, 0 failed |
+| `cargo clippy --locked --all-targets -- -D warnings` | clean |
+| `cargo test --workspace` | rust-strom 67 passed; ruststrom-acme 12 + 1 + 1 passed (11 Pebble tests ignored) |
+| `scripts/smoke-v2.sh` (release) | 44 passed, 0 failed |
 | `tests/e2e/run.sh` (whole suite incl. slow, `v2` marker strict) | 134 passed |
 | `--check` on `configs/config.toml`, `docker-config.toml` | valid |
