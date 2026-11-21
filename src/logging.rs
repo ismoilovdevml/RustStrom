@@ -2,12 +2,12 @@ use log::{info, warn, LevelFilter};
 use log4rs::{
     append::console::ConsoleAppender,
     config::{Appender, Logger, Root},
-    encode::pattern,
+    encode::pattern::PatternEncoder,
     Config,
 };
-use pattern::PatternEncoder;
 
-pub fn initialize() -> log4rs::Handle {
+/// Initializes console logging. The level comes from `LOG_LEVEL` (or `RUST_LOG`), default INFO.
+pub fn initialize() {
     let log_level = std::env::var("LOG_LEVEL")
         .or_else(|_| std::env::var("RUST_LOG"))
         .unwrap_or_else(|_| "INFO".into());
@@ -15,26 +15,29 @@ pub fn initialize() -> log4rs::Handle {
     let level_filter = parsed_level.unwrap_or(LevelFilter::Info);
 
     let pattern = PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S%.9f)} {({l}):5} {t} - {m}{n}");
-
     let stdout = ConsoleAppender::builder()
         .encoder(Box::new(pattern))
         .build();
     let config = Config::builder()
         .logger(Logger::builder().build("ureq", LevelFilter::Warn))
         .appender(Appender::builder().build("stdout", Box::new(stdout)))
-        .build(Root::builder().appender("stdout").build(level_filter))
-        .unwrap();
-
-    let handle = log4rs::init_config(config).expect("Initializing logging should not fail");
+        .build(Root::builder().appender("stdout").build(level_filter));
+    let initialized = match config {
+        Ok(config) => log4rs::init_config(config).map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    if let Err(e) = initialized {
+        eprintln!("Could not initialize logging: {}", e);
+        return;
+    }
     if parsed_level.is_none() {
         warn!("Invalid log level '{}', falling back to INFO", log_level);
     }
     info!("Logging Level: {}", level_filter);
-    handle
 }
 
-fn parse_level_filter(str: &str) -> Option<LevelFilter> {
-    match str.to_lowercase().as_str() {
+fn parse_level_filter(level: &str) -> Option<LevelFilter> {
+    match level.to_lowercase().as_str() {
         "off" => Some(LevelFilter::Off),
         "error" => Some(LevelFilter::Error),
         "warn" => Some(LevelFilter::Warn),

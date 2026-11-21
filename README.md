@@ -116,7 +116,7 @@ email = "admin@example.com"
 persist_dir = "/var/lib/rust-strom/acme"
 ```
 
-Limitations: ACME certificates are not requested at startup but on the first configuration reload (e.g. `touch` the config file once port 80 is reachable), and they are not renewed automatically - a new certificate is only ordered on a reload after the old one has expired.
+Certificates are ordered (HTTP-01 on the HTTP listener) right after startup, renewed when less than 30 days are left and installed without a restart. Port 80 must be reachable from the internet. Wildcard and IP names are not supported.
 
 HTTPS listeners negotiate HTTP/2 or HTTP/1.1 via ALPN.
 
@@ -170,6 +170,47 @@ errors = [404, 502]
 ```
 
 See [`configs/config.toml`](configs/config.toml) for a fully commented example.
+
+### v2 options (all optional)
+
+```toml
+# global
+threads = 4                        # Pingora worker threads (default: number of CPUs)
+max_connections = 0                # in-flight requests of the process, 503 above (0 = unlimited)
+grace_period_secs = 30             # SIGTERM drain limit
+client_header_timeout_ms = 30000   # a request head must arrive completely within this
+client_body_idle_timeout_ms = 60000 # longest pause while reading a request body (408)
+client_body_min_rate = 500         # bytes/s a request body must average after 10 s (0 = off)
+h2_idle_timeout_ms = 60000         # HTTP/2 connection without open streams is closed
+
+[backend_pools.upstream]           # per pool; the v1 [backend_pools.client] table works too
+connect_timeout_ms = 3000
+read_timeout_ms = 30000            # 504 when the backend is slower
+retries = 1                        # another backend on connect failure (idempotent requests also after errors)
+tls = false                        # TLS to backends, with sni = "" and verify_cert = true
+h2 = false                         # HTTP/2 to backends (needs tls)
+max_connections = 0                # in-flight requests of the pool, 503 above
+
+[backend_pools.health_config]
+rise = 1                           # successful checks to come back (2 recommended)
+fall = 1                           # failed checks to go down (3 recommended); failed connects count too
+kind = "http"                      # or "tcp"
+expected_status = [200, 399]
+
+[backend_pools.middlewares.Authentication]
+max_concurrent = 32                # concurrent LDAP exchanges; above it requests get 503
+```
+
+### Client IP and forwarding headers
+
+- The client IP is always the TCP peer address. There is no trusted-proxy mode yet: behind another load balancer, RustStrom sees that balancer's address.
+- `X-Forwarded-For` is appended to: whatever the client sent, then the peer address. Clients can write anything into the earlier entries, so backends must use `X-Real-IP` or the **last** `X-Forwarded-For` entry.
+- `X-Real-IP`, `X-Forwarded-Proto`, `X-Forwarded-Port` (the port the client connected to) and `X-Forwarded-Server` are always overwritten.
+- The rate limiter tracks at most 100 000 client IPs. Under a flood from many distinct addresses (botnet, IPv6 range) the oldest windows are evicted, so the per-IP limit can be exceeded. Use network-level protection for distributed floods.
+
+### Building
+
+Only a C compiler is needed: `vendor/libz-ng-sys` builds zlib-ng without cmake, as portable generic code. Do **not** set `ZLIB_NG_SIMD` for binaries that run on other machines; it compiles every zlib-ng file with AVX2/AVX-512 and the binary can crash with an illegal instruction on older CPUs.
 
 ---
 

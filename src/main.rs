@@ -1,209 +1,184 @@
-use arc_swap::{access::Map, ArcSwap};
-use clap::{App, Arg};
-use configuration::{read_initial_config, watch_config, RuntimeConfig};
-use hyper::{
-    header::CONTENT_TYPE,
-    service::{make_service_fn, service_fn},
-    Body, Response, Server, StatusCode,
-};
-use listeners::{AcceptorProducer, Https};
-use log::{error, info, warn};
-use prometheus::Encoder;
-use server::Scheme;
-use std::{convert::Infallible, io, net::SocketAddr, sync::Arc, time::Duration};
-use tls::ReconfigurableCertificateResolver;
-use tokio::try_join;
-use tokio_rustls::rustls::ServerConfig;
-use tokio_util::sync::CancellationToken;
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod acme;
-mod algorithms;
-mod backend_pool_matcher;
-mod configuration;
-mod error_response;
-mod health;
-mod http_client;
-mod listeners;
+mod config;
+mod frontend;
 mod logging;
+mod matcher;
 mod metrics;
 mod middleware;
-mod server;
+mod proxy;
+mod router;
+mod services;
+mod state;
 mod tls;
-mod utils;
+mod upstream;
+
+use clap::{Arg, ArgAction, Command};
+use log::info;
+use pingora_core::{
+    apps::HttpServerOptions,
+    server::{configuration::Opt, configuration::ServerConf, Server},
+    services::{background::background_service, listening::Service},
+};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// How long in-flight requests may take to finish after a shutdown signal.
-const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
 
-#[tokio::main]
-pub async fn main() -> Result<(), io::Error> {
-    let matches = App::new("RustStrom")
+fn cli() -> Command {
+    Command::new("RustStrom")
         .version(env!("CARGO_PKG_VERSION"))
         .about("RustStrom - High-Performance Load Balancer written in Rust")
         .arg(
-            Arg::with_name("config")
-                .short("c")
+            Arg::new("config")
+                .short('c')
                 .long("config")
                 .value_name("TOML FILE")
                 .help("The path to the configuration in TOML format.")
-                .required(true)
-                .takes_value(true),
+                .required(true),
         )
         .arg(
-            Arg::with_name("check")
+            Arg::new("check")
                 .long("check")
+                .action(ArgAction::SetTrue)
                 .help("Validate the configuration file and exit."),
         )
-        .get_matches();
+        .arg(
+            Arg::new("upgrade")
+                .short('u')
+                .long("upgrade")
+                .action(ArgAction::SetTrue)
+                .help("Take over the listening sockets of a running instance (graceful upgrade)."),
+        )
+        .arg(
+            Arg::new("daemon")
+                .short('d')
+                .long("daemon")
+                .action(ArgAction::SetTrue)
+                .help("Run in the background."),
+        )
+}
+
+fn run() -> Result<(), String> {
+    let matches = cli().get_matches();
     let config_path = matches
-        .value_of("config")
-        .expect("clap enforces the required config argument")
-        .to_string();
+        .get_one::<String>("config")
+        .cloned()
+        .ok_or_else(|| "--config is required".to_string())?;
 
     logging::initialize();
 
-    let config = read_initial_config(&config_path).await?;
-    if matches.is_present("check") {
+    let metrics = Arc::new(metrics::Metrics::new().map_err(|e| e.to_string())?);
+    let config = config::load(std::path::Path::new(&config_path), &metrics, None)?;
+    if matches.get_flag("check") {
         println!("Configuration '{}' is valid", config_path);
         return Ok(());
     }
 
-    let shutdown = CancellationToken::new();
-    tokio::spawn(wait_for_shutdown_signal(shutdown.clone()));
+    let http_address = config.http_address.to_string();
+    let https_socket = config.https_address;
+    let https_address = https_socket.to_string();
+    let metrics_address = config.metrics_address.to_string();
+    let process = config.process.clone();
+    let h2_idle_timeout = config.client.h2_idle_timeout;
+    let state = Arc::new(state::State::new(
+        config,
+        metrics,
+        PathBuf::from(&config_path),
+    ));
 
-    let servers = async {
-        try_join!(
-            listen_for_http_request(config.clone(), shutdown.clone()),
-            listen_for_https_request(config.clone(), shutdown.clone()),
-        )
-        .map(|_| ())
+    let opt = Opt {
+        upgrade: matches.get_flag("upgrade"),
+        daemon: matches.get_flag("daemon"),
+        nocapture: false,
+        test: false,
+        conf: None,
     };
-    let background = async {
-        try_join!(
-            watch_config(config_path, config.clone()),
-            watch_health(config.clone()),
-            serve_metrics(config.load().metrics_address, shutdown.clone()),
-        )
-        .map(|_| ())
+    let mut server_conf = ServerConf {
+        threads: process.threads,
+        grace_period_seconds: Some(process.grace_period_secs),
+        graceful_shutdown_timeout_seconds: Some(5),
+        upstream_keepalive_pool_size: process.upstream_keepalive_pool_size,
+        upgrade_sock: process.upgrade_sock.clone(),
+        pid_file: process.pid_file.clone(),
+        max_retries: process.max_retries.max(1),
+        ..ServerConf::default()
     };
-    let drain_deadline = async {
-        shutdown.cancelled().await;
-        tokio::time::sleep(SHUTDOWN_DRAIN_TIMEOUT).await;
-    };
+    server_conf.version = 1;
+    let mut server = Server::new_with_opt_and_conf(opt, server_conf);
+    server.bootstrap();
 
-    tokio::select! {
-        result = servers => result?,
-        result = background => result?,
-        _ = drain_deadline => warn!(
-            "In-flight requests did not finish within {:?}, exiting anyway",
-            SHUTDOWN_DRAIN_TIMEOUT
-        ),
-    }
-    info!("Shutdown complete");
-    Ok(())
-}
+    let mut http_proxy =
+        pingora_proxy::http_proxy(&server.configuration, proxy::Proxy::new(state.clone()));
+    // An HTTP/2 connection without an open stream is closed after h2_idle_timeout_ms; this also
+    // ends clients that never complete a HEADERS frame.
+    let mut server_options = HttpServerOptions::default();
+    server_options.h2_idle_timeout = Some(h2_idle_timeout);
+    http_proxy.server_options = Some(server_options);
+    let frontend = frontend::Frontend::new(
+        http_proxy,
+        https_socket,
+        tls::SniResolver::new(state.clone()),
+        state.clone(),
+    )?;
+    let mut proxy = Service::new("RustStrom proxy".to_string(), frontend);
+    // Both listeners are plain TCP for Pingora; TLS is terminated in the frontend
+    proxy.add_tcp(&http_address);
+    proxy.add_tcp(&https_address);
+    info!(
+        "Listening on http://{} and https://{} with {} worker threads",
+        http_address, https_address, process.threads
+    );
 
-/// Cancels `token` on SIGINT or SIGTERM (Docker, Kubernetes and systemd send SIGTERM).
-async fn wait_for_shutdown_signal(token: CancellationToken) {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-        match signal(SignalKind::terminate()) {
-            Ok(mut sigterm) => {
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {},
-                    _ = sigterm.recv() => {},
-                }
-            }
-            Err(e) => {
-                error!("Could not install SIGTERM handler: {}", e);
-                let _ = tokio::signal::ctrl_c().await;
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
-    info!("Received shutdown signal, draining connections...");
-    token.cancel();
-}
+    let mut metrics_service = Service::new(
+        "RustStrom metrics".to_string(),
+        services::MetricsApp {
+            state: state.clone(),
+        },
+    );
+    metrics_service.add_tcp(&metrics_address);
+    metrics_service.threads = Some(1);
+    info!(
+        "Serving Prometheus metrics on http://{}/metrics",
+        metrics_address
+    );
 
-async fn watch_health(config: Arc<ArcSwap<RuntimeConfig>>) -> Result<(), io::Error> {
-    let backend_pools = Map::new(config.clone(), |it: &RuntimeConfig| {
-        &it.shared_data.backend_pools
-    });
-    let health_interval = Map::new(config.clone(), |it: &RuntimeConfig| &it.health_interval);
-    health::watch_health(backend_pools, health_interval).await;
-    Ok(())
-}
+    let health = background_service("health checks", services::HealthService(state.clone()));
+    let watcher = background_service(
+        "config watcher",
+        services::ConfigWatchService(state.clone()),
+    );
+    let drain = background_service(
+        "drain",
+        services::DrainService {
+            state: state.clone(),
+            grace_period: Duration::from_secs(process.grace_period_secs),
+        },
+    );
 
-async fn listen_for_http_request(
-    config: Arc<ArcSwap<RuntimeConfig>>,
-    shutdown: CancellationToken,
-) -> Result<(), io::Error> {
-    let http = listeners::Http;
-    let address = config.load().http_address;
-    let acceptor = http.produce_acceptor(address).await?;
+    let acme = background_service(
+        "acme",
+        acme::AcmeService {
+            state: state.clone(),
+        },
+    );
 
-    server::create(acceptor, config, Scheme::HTTP, shutdown).await
-}
-
-async fn listen_for_https_request(
-    config: Arc<ArcSwap<RuntimeConfig>>,
-    shutdown: CancellationToken,
-) -> Result<(), io::Error> {
-    let certificates = Map::new(config.clone(), |it: &RuntimeConfig| &it.certificates);
-    let cert_resolver = ReconfigurableCertificateResolver::new(certificates);
-
-    let mut tls_config = ServerConfig::builder()
-        .with_safe_defaults()
-        .with_no_client_auth()
-        .with_cert_resolver(Arc::new(cert_resolver));
-    // Without ALPN clients can never negotiate HTTP/2 over TLS.
-    tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-
-    let https = Https { tls_config };
-    let address = config.load().https_address;
-    let acceptor = https.produce_acceptor(address).await?;
-
-    server::create(acceptor, config, Scheme::HTTPS, shutdown).await
-}
-
-async fn serve_metrics(address: SocketAddr, shutdown: CancellationToken) -> Result<(), io::Error> {
-    let make_service = make_service_fn(|_| async {
-        Ok::<_, Infallible>(service_fn(|request: hyper::Request<Body>| async move {
-            let response = if request.uri().path() == "/metrics" {
-                let encoder = prometheus::TextEncoder::new();
-                let mut buffer = Vec::new();
-                match encoder.encode(&prometheus::gather(), &mut buffer) {
-                    Ok(()) => Response::builder()
-                        .header(CONTENT_TYPE, encoder.format_type())
-                        .body(Body::from(buffer)),
-                    Err(e) => {
-                        error!("Could not encode metrics: {}", e);
-                        Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(Body::empty())
-                    }
-                }
-            } else {
-                Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::empty())
-            };
-            Ok::<_, Infallible>(response.unwrap_or_else(|_| Response::new(Body::empty())))
-        }))
-    });
-
-    let server = Server::try_bind(&address)
-        .map_err(|e| io::Error::other(format!("Could not bind metrics on {}: {}", address, e)))?
-        .serve(make_service);
-    info!("Serving Prometheus metrics on http://{}/metrics", address);
-    server
-        .with_graceful_shutdown(shutdown.cancelled_owned())
-        .await
-        .map_err(io::Error::other)
+    let proxy_handle = server.add_service(proxy);
+    server.add_service(metrics_service);
+    server.add_service(health);
+    server.add_service(watcher);
+    server.add_service(drain);
+    // Orders start only once the HTTP listener can answer the HTTP-01 challenges
+    let acme_handle = server.add_service(acme);
+    acme_handle.add_dependency(&proxy_handle);
+    server.run_forever();
 }

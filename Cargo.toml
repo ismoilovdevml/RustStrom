@@ -1,62 +1,50 @@
 [package]
 name = "rust-strom"
-version = "1.1.1"
+version = "2.0.0"
 edition = "2021"
+description = "RustStrom - HTTP(S) load balancer on Cloudflare Pingora"
+license = "MIT"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[workspace]
+members = [".", "crates/ruststrom-acme"]
 
 [dependencies]
-# ACME/SSL - Keep existing (no security issues)
-acme-lib = "0.9.1"
+# ACME client (HTTP-01), see src/acme.rs
+ruststrom-acme = { path = "crates/ruststrom-acme" }
+
+# Data plane
+pingora-core = { version = "0.9.1", default-features = false, features = ["openssl"] }
+pingora-proxy = { version = "0.9.1", default-features = false, features = ["openssl"] }
+pingora-http = "0.9.1"
+# Static OpenSSL so the musl build does not need a system libssl
+openssl = { version = "0.10", features = ["vendored"] }
 
 # Core utilities
-arc-swap = "1.2"
-lazy_static = "1.4"
-pin-project = "1.0"
-
-# Async runtime (keep existing stable versions)
-tokio = { version = "1.0", features = ["full"] }
-tokio-util = { version = "0.7.9", features = ["full"] }
-tokio-rustls = "0.24"
-async-compression = { version = "0.4.4", features = ["brotli", "deflate", "gzip", "tokio"] }
-async-stream = "0.3"
+arc-swap = "1.7"
 async-trait = "0.1"
+bytes = "1"
+http = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal", "io-util"] }
 
-# HTTP/Networking (keep existing)
-hyper = { version = "0.14", features = ["client", "server", "http1", "http2", "stream", "runtime", "tcp"] }
-hyper-timeout = "0.4"
-
-# Security and TLS
-rustls-pemfile = "1.0"
-openssl-sys = { version = "0.9", features = ["vendored"] }
-
-# Data structures
-bytes = "1.5.0"
-futures = "0.3"
-futures-util = "0.3"
-fnv = "1.0.7"
-linked-hash-map = "0.5"
-
-# CLI - Keep clap 2.34 to avoid breaking changes
-clap = "2.34"
+# CLI and config
+clap = { version = "4.5", default-features = false, features = ["std", "help", "usage", "error-context"] }
 toml = { version = "0.5.11", features = ["preserve_order"] }
 serde = { version = "1.0", features = ["derive"] }
+notify = "4.0"
 
 # Logging and metrics
 log = "0.4"
-log4rs = "1.0"
-prometheus = "0.14.0"
+log4rs = { version = "1.3", default-features = false, features = ["console_appender", "pattern_encoder"] }
+prometheus = { version = "0.14.0", default-features = false }
 
-# File watching - Keep notify 4.0 to avoid breaking changes
-notify = "4.0"
-
-# Authentication
+# Middlewares
 http-auth-basic = "0.3.3"
 ldap3 = "0.11.3"
 cookie = "0.17"
 
 # Other
-chrono = "0.4"
+fnv = "1.0.7"
+linked-hash-map = "0.5"
 gethostname = "0.4.3"
 pom = "3.2"
 rand = "0.8"
@@ -66,13 +54,14 @@ url = "2.2"
 # Allocator: musl's default malloc serialises on a global lock under multi-core load
 mimalloc = { version = "0.1", default-features = false }
 
-
 [profile.release]
-opt-level = 3              # Maximum optimization
-lto = "fat"                # Link-time optimization for better performance
-codegen-units = 1          # Single codegen unit for better optimization
-panic = "unwind"           # A panic kills only the affected connection task, not the whole proxy
-strip = true               # Strip symbols for smaller binary
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "unwind"           # A panic kills only the affected request task, not the whole proxy
+strip = true
 
-# [future-incompat-report]
-# frequency = "always"    
+# pingora-core enables flate2/zlib-ng; upstream libz-ng-sys needs cmake. The vendored copy builds
+# the same zlib-ng sources with `cc` (see vendor/libz-ng-sys/README.ruststrom.md).
+[patch.crates-io]
+libz-ng-sys = { path = "vendor/libz-ng-sys" }
