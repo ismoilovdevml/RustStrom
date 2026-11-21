@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [2.0.0] - Unreleased
 
+### Platforms
+
+- Linux only. Release binaries: `rust-strom-linux-x86_64` (static musl) and the Docker image. macOS binaries are no longer built and `install.sh` refuses macOS.
+
 ### Changed
 
 - Data plane rewritten on Cloudflare Pingora 0.9. Every v1.1 configuration that passes `--check` still loads; new keys are optional (see README, "v2 options").

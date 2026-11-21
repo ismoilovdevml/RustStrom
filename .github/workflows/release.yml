@@ -49,16 +49,6 @@ jobs:
             os: ubuntu-latest
             name: rust-strom-linux-x86_64
 
-          # macOS Intel
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            name: rust-strom-macos-x86_64
-
-          # macOS Apple Silicon
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            name: rust-strom-macos-aarch64
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -137,12 +127,8 @@ jobs:
 
             Or download a binary from the assets below:
             - `rust-strom-linux-x86_64` (static MUSL)
-            - `rust-strom-macos-x86_64`
-            - `rust-strom-macos-aarch64`
           files: |
             artifacts/rust-strom-linux-x86_64/rust-strom-linux-x86_64
-            artifacts/rust-strom-macos-x86_64/rust-strom-macos-x86_64
-            artifacts/rust-strom-macos-aarch64/rust-strom-macos-aarch64
           draft: false
           prerelease: false
           make_latest: true

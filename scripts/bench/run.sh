@@ -105,7 +105,11 @@ podman ps -a --format '{{.Names}}' | grep -q "^$NAME_PREFIX-\(haproxy\|be[0-9]\)
 
 ulimit -n 1048576
 
-RUN_ID="$(date +%Y%m%d-%H%M%S)$([[ $SMOKE -eq 1 ]] && echo -smoke)"
+# The suffix must not be a failing command substitution: under `set -e` a
+# non-smoke run would exit here silently.
+RUN_SUFFIX=""
+if [[ $SMOKE -eq 1 ]]; then RUN_SUFFIX="-smoke"; fi
+RUN_ID="$(date +%Y%m%d-%H%M%S)${RUN_SUFFIX}"
 RUN_DIR="$RUNS_DIR/$RUN_ID"
 mkdir -p "$RUN_DIR/conf" "$RUN_DIR/logs"
 log "run directory: $RUN_DIR"

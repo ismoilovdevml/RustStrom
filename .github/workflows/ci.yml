@@ -53,7 +53,7 @@ jobs:
     name: Build & Test
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]  # Linux is the supported platform; macOS builds are not maintained for v2
         rust: [stable]
     runs-on: ${{ matrix.os }}
     steps:
