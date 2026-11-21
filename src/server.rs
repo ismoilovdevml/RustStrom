@@ -45,6 +45,11 @@ where
     IE: Into<Box<dyn Error + Send + Sync>>,
     IO: AsyncRead + AsyncWrite + Unpin + Send + RemoteAddress + 'static,
 {
+    // X-Forwarded-Port must be the port clients connected to, not a fixed 80/443
+    let listener_port = match scheme {
+        Scheme::HTTP => config.load().http_address.port(),
+        Scheme::HTTPS => config.load().https_address.port(),
+    };
     let service = make_service_fn(move |stream: &IO| {
         // The peer may already be gone (e.g. RST right after accept). Returning an
         // error here only drops this one connection instead of aborting the process.
@@ -56,6 +61,7 @@ where
                 client_address: client_address?,
                 config,
                 scheme,
+                listener_port,
             })
         }
     });
@@ -101,6 +107,7 @@ pub struct MainService {
     client_address: SocketAddr,
     config: Arc<ArcSwap<RuntimeConfig>>,
     scheme: Scheme,
+    listener_port: u16,
 }
 
 impl Service<Request<Body>> for MainService {
@@ -136,6 +143,7 @@ impl Service<Request<Body>> for MainService {
         match pool_by_req(shared_data, &request, &self.scheme) {
             Some(pool) => {
                 let client_scheme = self.scheme;
+                let listener_port = self.listener_port;
                 let client_address = self.client_address;
 
                 Box::pin(async move {
@@ -149,6 +157,11 @@ impl Service<Request<Body>> for MainService {
                         metrics::HTTP_REQUEST_DURATION.observe(start_time.elapsed().as_secs_f64());
                         metrics::HTTP_STATUS_CODES.with_label_values(&["502"]).inc();
                         metrics::HTTP_ERRORS_TOTAL.inc();
+                        // Every backend of the pool is down: count it, or alerts on
+                        // backend_failures_total miss a complete outage
+                        metrics::BACKEND_FAILURES
+                            .with_label_values(&["no_healthy_backend"])
+                            .inc();
                         return Ok(bad_gateway());
                     }
 
@@ -164,6 +177,7 @@ impl Service<Request<Body>> for MainService {
                             request,
                             &pool.chain,
                             &client_scheme,
+                            listener_port,
                             &client_address,
                             &pool.client,
                         )
@@ -361,6 +375,7 @@ mod tests {
     fn generate_test_service(host: String, scheme: Scheme) -> MainService {
         MainService {
             scheme,
+            listener_port: 80,
             client_address: "127.0.0.1:3000".parse().unwrap(),
             config: Arc::new(ArcSwap::from_pointee(generate_config(SharedData {
                 backend_pools: vec![Arc::new(

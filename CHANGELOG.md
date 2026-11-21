@@ -3,6 +3,13 @@
 All notable changes to RustStrom are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.1] - 2026-11-20
+
+### Fixed
+
+- `X-Forwarded-Port` now carries the port of the listener the client connected to (e.g. `8443`) instead of a fixed `80`/`443`, so backends build correct redirect URLs on non-standard ports. Found by the new end-to-end suite.
+- A `502` caused by every backend of a pool being unhealthy now increments `backend_failures_total{backend="no_healthy_backend"}`, so alerts on that metric also fire on a complete outage.
+
 ## [1.1.0] - 2026-11-20
 
 ### Breaking changes

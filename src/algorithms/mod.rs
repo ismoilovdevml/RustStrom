@@ -99,6 +99,7 @@ impl<'l> RequestForwarder<'l> {
         request: Request<Body>,
         chain: &MiddlewareChain,
         client_scheme: &Scheme,
+        listener_port: u16,
         client_address: &SocketAddr,
         client: &Client<StrategyNotifyHttpConnector, Body>,
     ) -> Response<Body> {
@@ -115,6 +116,7 @@ impl<'l> RequestForwarder<'l> {
         };
         let context = middleware::Context {
             client_scheme,
+            listener_port,
             client_address,
             backend_uri,
             client,

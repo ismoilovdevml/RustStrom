@@ -95,6 +95,8 @@ pub trait Middleware: Send + Sync + std::fmt::Debug {
 
 pub struct Context<'l> {
     pub client_scheme: &'l Scheme,
+    /// Port of the listener the client connected to.
+    pub listener_port: u16,
     pub client_address: &'l SocketAddr,
     pub backend_uri: Uri,
     pub client: &'l Client<StrategyNotifyHttpConnector, Body>,
@@ -206,11 +208,14 @@ fn backend_request(request: Request<Body>, context: &Context) -> Request<Body> {
     if let Ok(value) = HeaderValue::from_str(&client_ip) {
         headers.insert(X_REAL_IP.clone(), value);
     }
-    let (port, proto) = match context.client_scheme {
-        Scheme::HTTP => ("80", "http"),
-        Scheme::HTTPS => ("443", "https"),
+    let proto = match context.client_scheme {
+        Scheme::HTTP => "http",
+        Scheme::HTTPS => "https",
     };
-    headers.insert(X_FORWARDED_PORT.clone(), HeaderValue::from_static(port));
+    headers.insert(
+        X_FORWARDED_PORT.clone(),
+        HeaderValue::from(context.listener_port),
+    );
     headers.insert(X_FORWARDED_PROTO.clone(), HeaderValue::from_static(proto));
     match forwarded_server_header() {
         Some(hostname) => {
@@ -261,6 +266,7 @@ mod tests {
         let client_address: SocketAddr = "203.0.113.7:51234".parse().unwrap();
         let context = Context {
             client_scheme: &scheme,
+            listener_port: 8443,
             client_address: &client_address,
             backend_uri: "http://10.0.0.1:8080/path?q=1".parse().unwrap(),
             client: &client,
@@ -285,6 +291,7 @@ mod tests {
         assert_eq!(headers.get_all("x-forwarded-proto").iter().count(), 1);
         assert_eq!(headers["x-forwarded-proto"], "http");
         assert_eq!(headers["x-forwarded-for"], "1.2.3.4, 203.0.113.7");
+        assert_eq!(headers["x-forwarded-port"], "8443");
         assert_eq!(headers["host"], "example.com");
         assert_eq!(forwarded.uri(), "http://10.0.0.1:8080/path?q=1");
     }
