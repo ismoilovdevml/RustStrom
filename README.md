@@ -3,7 +3,7 @@
 HTTP/HTTPS Load Balancer Built with Rust
 
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.0-green.svg)](https://github.com/ismoilovdevml/RustStrom/releases)
+[![Release](https://img.shields.io/github/v/release/ismoilovdevml/RustStrom)](https://github.com/ismoilovdevml/RustStrom/releases)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
 
 ---
